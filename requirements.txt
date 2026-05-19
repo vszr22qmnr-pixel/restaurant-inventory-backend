@@ -2,9 +2,13 @@ fastapi
 uvicorn
 python-multipart
 openai
+<<<<<<< HEAD
 supabase
 postgrest
 gotrue
 realtime
 storage3
 httpx
+=======
+pillow
+>>>>>>> 04447f2 (Add requirements file)
