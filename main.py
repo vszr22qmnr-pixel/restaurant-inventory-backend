@@ -66,41 +66,35 @@ async def root():
     }
 
 # -----------------------------------
-# CLEAN OPENAI JSON
+# CLEAN JSON
 # -----------------------------------
 
 def clean_json(raw_text):
 
-    cleaned = (
+    return (
         raw_text
         .replace("```json", "")
         .replace("```", "")
         .strip()
     )
 
-    return cleaned
-
 # -----------------------------------
-# PRODUCT MATCHING ENGINE
+# MATCH PRODUCTS
 # -----------------------------------
 
 def match_product(product_name):
 
     try:
 
-        print("MATCHING PRODUCT:")
-        print(product_name)
-
-        response = supabase.table(
-            "product_aliases"
-        ).select(
-            "*"
-        ).execute()
+        response = (
+            supabase.table(
+                "product_aliases"
+            )
+            .select("*")
+            .execute()
+        )
 
         aliases = response.data
-
-        print("ALIASES FOUND:")
-        print(aliases)
 
         product_name_lower = (
             product_name.lower().strip()
@@ -109,13 +103,12 @@ def match_product(product_name):
         for alias in aliases:
 
             raw_name = (
-                alias["raw_product_name"]
+                alias[
+                    "raw_product_name"
+                ]
                 .lower()
                 .strip()
             )
-
-            print("CHECKING:")
-            print(raw_name)
 
             if (
                 raw_name in product_name_lower
@@ -123,20 +116,16 @@ def match_product(product_name):
                 product_name_lower in raw_name
             ):
 
-                print("MATCH FOUND")
-
                 return alias[
                     "canonical_product_id"
                 ]
-
-        print("NO MATCH FOUND")
 
         return None
 
     except Exception as e:
 
         print(
-            "PRODUCT MATCH ERROR:"
+            "MATCH ERROR:"
         )
 
         print(str(e))
@@ -154,21 +143,25 @@ def update_live_inventory(
 
     try:
 
-        print("UPDATING LIVE INVENTORY")
-
         existing_inventory = (
+
             supabase.table(
                 "live_inventory"
             )
+
             .select("*")
+
             .eq(
                 "canonical_product_id",
                 canonical_product_id
             )
+
             .execute()
         )
 
+        # -----------------------------
         # UPDATE EXISTING
+        # -----------------------------
 
         if existing_inventory.data:
 
@@ -178,6 +171,7 @@ def update_live_inventory(
             )
 
             current_quantity = float(
+
                 existing_item[
                     "current_quantity"
                 ]
@@ -188,9 +182,6 @@ def update_live_inventory(
                 +
                 estimated_quantity
             )
-
-            print("NEW QUANTITY:")
-            print(new_quantity)
 
             supabase.table(
                 "live_inventory"
@@ -206,11 +197,11 @@ def update_live_inventory(
 
             ).execute()
 
+        # -----------------------------
         # CREATE NEW
+        # -----------------------------
 
         else:
-
-            print("CREATING NEW INVENTORY")
 
             supabase.table(
                 "live_inventory"
@@ -245,7 +236,7 @@ def update_live_inventory(
         print(str(e))
 
 # -----------------------------------
-# INVENTORY SCANNER
+# INVENTORY SCAN
 # -----------------------------------
 
 @app.post("/scan")
@@ -257,7 +248,9 @@ async def scan_inventory(
 
         print("SCAN STARTED")
 
+        # -----------------------------
         # READ IMAGE
+        # -----------------------------
 
         image_bytes = await file.read()
 
@@ -267,9 +260,12 @@ async def scan_inventory(
             ).decode("utf-8")
         )
 
+        # -----------------------------
         # OPENAI REQUEST
+        # -----------------------------
 
         response = (
+
             client.chat.completions.create(
 
                 model="gpt-4.1-mini",
@@ -330,9 +326,6 @@ async def scan_inventory(
             raw_result
         )
 
-        print("CLEANED RESULT:")
-        print(cleaned_result)
-
         ai_products = json.loads(
             cleaned_result
         )
@@ -340,12 +333,17 @@ async def scan_inventory(
         print("AI PRODUCTS:")
         print(ai_products)
 
+        # -----------------------------
         # CREATE SCAN RECORD
+        # -----------------------------
 
         scan_insert = (
+
             supabase.table(
                 "inventory_scans"
-            ).insert({
+            )
+
+            .insert({
 
                 "restaurant_id":
                 RESTAURANT_ID,
@@ -353,11 +351,10 @@ async def scan_inventory(
                 "image_url":
                 "temporary"
 
-            }).execute()
-        )
+            })
 
-        print("SCAN INSERT:")
-        print(scan_insert.data)
+            .execute()
+        )
 
         inventory_scan_id = (
             scan_insert
@@ -366,12 +363,11 @@ async def scan_inventory(
 
         processed_products = []
 
+        # -----------------------------
         # PROCESS PRODUCTS
+        # -----------------------------
 
         for item in ai_products:
-
-            print("PROCESSING ITEM:")
-            print(item)
 
             product_name = item.get(
                 "product_name",
@@ -398,15 +394,22 @@ async def scan_inventory(
                 )
             )
 
-            print("CANONICAL PRODUCT ID:")
-            print(canonical_product_id)
+            matched_existing = (
+                canonical_product_id
+                is not None
+            )
 
+            # -------------------------
             # SAVE INVENTORY ITEM
+            # -------------------------
 
             insert_response = (
+
                 supabase.table(
                     "inventory_items"
-                ).insert({
+                )
+
+                .insert({
 
                     "inventory_scan_id":
                     inventory_scan_id,
@@ -420,20 +423,31 @@ async def scan_inventory(
                     "confidence":
                     confidence
 
-                }).execute()
+                })
+
+                .execute()
             )
 
-            print("INVENTORY ITEM INSERT:")
+            print(
+                "ITEM INSERTED:"
+            )
+
             print(insert_response.data)
 
+            # -------------------------
             # UPDATE LIVE INVENTORY
+            # -------------------------
 
-            if canonical_product_id:
+            if matched_existing:
 
                 update_live_inventory(
                     canonical_product_id,
                     estimated_quantity
                 )
+
+            # -------------------------
+            # FRONTEND RESPONSE OBJECT
+            # -------------------------
 
             processed_products.append({
 
@@ -446,10 +460,16 @@ async def scan_inventory(
                 "confidence":
                 confidence,
 
+                "matched_existing":
+                matched_existing,
+
                 "canonical_product_id":
                 canonical_product_id
-
             })
+
+        # -----------------------------
+        # FINAL RESPONSE
+        # -----------------------------
 
         return {
 
@@ -458,7 +478,7 @@ async def scan_inventory(
             "inventory_scan_id":
             inventory_scan_id,
 
-            "products":
+            "result":
             processed_products
         }
 
@@ -494,6 +514,7 @@ async def scan_invoice(
         )
 
         response = (
+
             client.chat.completions.create(
 
                 model="gpt-4.1-mini",
