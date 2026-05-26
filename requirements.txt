@@ -1,4 +1,10 @@
 fastapi
-uvicorn[standard]
-openai
+uvicorn
 python-multipart
+openai
+supabase
+postgrest
+gotrue
+realtime
+storage3
+httpx
