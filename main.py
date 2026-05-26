@@ -54,32 +54,30 @@ RESTAURANT_ID = (
 )
 
 # -----------------------------------
-# ROOT ROUTE
-# -----------------------------------
-
-@app.get("/")
-async def root():
-
-    return {
-        "status":
-        "Restaurant Inventory AI Backend Running"
-    }
-
-# -----------------------------------
-# CLEAN JSON
+# CLEAN OPENAI JSON
 # -----------------------------------
 
 def clean_json(raw_text):
 
     return (
+
         raw_text
-        .replace("```json", "")
-        .replace("```", "")
+
+        .replace(
+            "```json",
+            ""
+        )
+
+        .replace(
+            "```",
+            ""
+        )
+
         .strip()
     )
 
 # -----------------------------------
-# MATCH PRODUCTS
+# MATCH PRODUCT
 # -----------------------------------
 
 def match_product(product_name):
@@ -87,10 +85,13 @@ def match_product(product_name):
     try:
 
         response = (
+
             supabase.table(
                 "product_aliases"
             )
+
             .select("*")
+
             .execute()
         )
 
@@ -103,17 +104,27 @@ def match_product(product_name):
         for alias in aliases:
 
             raw_name = (
+
                 alias[
                     "raw_product_name"
                 ]
+
                 .lower()
+
                 .strip()
             )
 
             if (
-                raw_name in product_name_lower
+
+                raw_name
+                in
+                product_name_lower
+
                 or
-                product_name_lower in raw_name
+
+                product_name_lower
+                in
+                raw_name
             ):
 
                 return alias[
@@ -126,6 +137,99 @@ def match_product(product_name):
 
         print(
             "MATCH ERROR:"
+        )
+
+        print(str(e))
+
+        return None
+
+# -----------------------------------
+# CREATE NEW PRODUCT
+# -----------------------------------
+
+def create_new_product(
+    product_name,
+    estimated_quantity
+):
+
+    try:
+
+        # -----------------------------
+        # CREATE CANONICAL PRODUCT
+        # -----------------------------
+
+        canonical_insert = (
+
+            supabase.table(
+                "canonical_products"
+            )
+
+            .insert({
+
+                "canonical_name":
+                product_name
+
+            })
+
+            .execute()
+        )
+
+        canonical_product_id = (
+
+            canonical_insert
+            .data[0]["id"]
+        )
+
+        # -----------------------------
+        # CREATE ALIAS
+        # -----------------------------
+
+        supabase.table(
+            "product_aliases"
+        ).insert({
+
+            "raw_product_name":
+            product_name,
+
+            "canonical_product_id":
+            canonical_product_id
+
+        }).execute()
+
+        # -----------------------------
+        # CREATE LIVE INVENTORY
+        # -----------------------------
+
+        supabase.table(
+            "live_inventory"
+        ).insert({
+
+            "restaurant_id":
+            RESTAURANT_ID,
+
+            "canonical_product_id":
+            canonical_product_id,
+
+            "current_quantity":
+            estimated_quantity,
+
+            "unit":
+            "lbs",
+
+            "par_level":
+            20,
+
+            "reorder_threshold":
+            5
+
+        }).execute()
+
+        return canonical_product_id
+
+    except Exception as e:
+
+        print(
+            "CREATE PRODUCT ERROR:"
         )
 
         print(str(e))
@@ -198,7 +302,7 @@ def update_live_inventory(
             ).execute()
 
         # -----------------------------
-        # CREATE NEW
+        # CREATE IF MISSING
         # -----------------------------
 
         else:
@@ -236,7 +340,20 @@ def update_live_inventory(
         print(str(e))
 
 # -----------------------------------
-# INVENTORY SCAN
+# ROOT ROUTE
+# -----------------------------------
+
+@app.get("/")
+async def root():
+
+    return {
+
+        "status":
+        "Restaurant Inventory AI Backend Running"
+    }
+
+# -----------------------------------
+# SCAN INVENTORY
 # -----------------------------------
 
 @app.post("/scan")
@@ -255,9 +372,12 @@ async def scan_inventory(
         image_bytes = await file.read()
 
         base64_image = (
+
             base64.b64encode(
                 image_bytes
-            ).decode("utf-8")
+            )
+
+            .decode("utf-8")
         )
 
         # -----------------------------
@@ -313,6 +433,7 @@ async def scan_inventory(
         )
 
         raw_result = (
+
             response
             .choices[0]
             .message
@@ -368,6 +489,9 @@ async def scan_inventory(
         # -----------------------------
 
         for item in ai_products:
+
+            print("PROCESSING ITEM:")
+            print(item)
 
             product_name = item.get(
                 "product_name",
@@ -446,7 +570,7 @@ async def scan_inventory(
                 )
 
             # -------------------------
-            # FRONTEND RESPONSE OBJECT
+            # FRONTEND RESPONSE
             # -------------------------
 
             processed_products.append({
@@ -464,12 +588,11 @@ async def scan_inventory(
                 matched_existing,
 
                 "canonical_product_id":
-                canonical_product_id
-            })
+                canonical_product_id,
 
-        # -----------------------------
-        # FINAL RESPONSE
-        # -----------------------------
+                "needs_creation":
+                canonical_product_id is None
+            })
 
         return {
 
@@ -495,6 +618,63 @@ async def scan_inventory(
         }
 
 # -----------------------------------
+# CREATE PRODUCT
+# -----------------------------------
+
+@app.post("/create_product")
+async def create_product(
+    product_data: dict
+):
+
+    try:
+
+        product_name = (
+            product_data[
+                "product_name"
+            ]
+        )
+
+        estimated_quantity = float(
+
+            product_data.get(
+                "estimated_quantity",
+                0
+            )
+        )
+
+        canonical_product_id = (
+            create_new_product(
+
+                product_name,
+
+                estimated_quantity
+            )
+        )
+
+        return {
+
+            "success": True,
+
+            "canonical_product_id":
+            canonical_product_id
+        }
+
+    except Exception as e:
+
+        print(
+            "CREATE PRODUCT ENDPOINT ERROR:"
+        )
+
+        print(str(e))
+
+        return {
+
+            "success": False,
+
+            "error": str(e)
+        }
+
+# -----------------------------------
 # INVOICE SCANNER
 # -----------------------------------
 
@@ -508,9 +688,12 @@ async def scan_invoice(
         image_bytes = await file.read()
 
         base64_image = (
+
             base64.b64encode(
                 image_bytes
-            ).decode("utf-8")
+            )
+
+            .decode("utf-8")
         )
 
         response = (
@@ -552,6 +735,7 @@ async def scan_invoice(
         )
 
         raw_result = (
+
             response
             .choices[0]
             .message
