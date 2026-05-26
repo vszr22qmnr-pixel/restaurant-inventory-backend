@@ -77,6 +77,103 @@ def clean_json(raw_text):
     )
 
 # -----------------------------------
+# AI PRODUCT ENRICHMENT
+# -----------------------------------
+
+def enrich_product_data(
+    product_name
+):
+
+    try:
+
+        enrichment_response = (
+
+            client.chat.completions.create(
+
+                model="gpt-4.1-mini",
+
+                messages=[
+
+                    {
+                        "role": "user",
+
+                        "content":
+                        f"""
+
+                        Given this restaurant inventory item:
+
+                        {product_name}
+
+                        Determine:
+
+                        1. Best inventory category
+                        2. Best base unit
+
+                        Return ONLY valid JSON.
+
+                        Example:
+
+                        {{
+                          "category": "Produce",
+                          "base_unit": "lbs"
+                        }}
+                        """
+                    }
+                ]
+            )
+        )
+
+        enrichment_raw = (
+
+            enrichment_response
+            .choices[0]
+            .message
+            .content
+        )
+
+        enrichment_cleaned = (
+            clean_json(
+                enrichment_raw
+            )
+        )
+
+        enrichment_data = json.loads(
+            enrichment_cleaned
+        )
+
+        return {
+
+            "category":
+            enrichment_data.get(
+                "category",
+                "Other"
+            ),
+
+            "base_unit":
+            enrichment_data.get(
+                "base_unit",
+                "each"
+            )
+        }
+
+    except Exception as e:
+
+        print(
+            "ENRICHMENT ERROR:"
+        )
+
+        print(str(e))
+
+        return {
+
+            "category":
+            "Other",
+
+            "base_unit":
+            "each"
+        }
+
+# -----------------------------------
 # MATCH PRODUCT
 # -----------------------------------
 
@@ -149,14 +246,12 @@ def match_product(product_name):
 
 def create_new_product(
     product_name,
-    estimated_quantity
+    estimated_quantity,
+    category,
+    base_unit
 ):
 
     try:
-
-        # -----------------------------
-        # CREATE CANONICAL PRODUCT
-        # -----------------------------
 
         canonical_insert = (
 
@@ -167,7 +262,19 @@ def create_new_product(
             .insert({
 
                 "canonical_name":
-                product_name
+                product_name,
+
+                "category":
+                category,
+
+                "base_unit":
+                base_unit,
+
+                "created_by_ai":
+                True,
+
+                "ai_confidence":
+                0.9
 
             })
 
@@ -214,7 +321,7 @@ def create_new_product(
             estimated_quantity,
 
             "unit":
-            "lbs",
+            base_unit,
 
             "par_level":
             20,
@@ -263,10 +370,6 @@ def update_live_inventory(
             .execute()
         )
 
-        # -----------------------------
-        # UPDATE EXISTING
-        # -----------------------------
-
         if existing_inventory.data:
 
             existing_item = (
@@ -301,10 +404,6 @@ def update_live_inventory(
 
             ).execute()
 
-        # -----------------------------
-        # CREATE IF MISSING
-        # -----------------------------
-
         else:
 
             supabase.table(
@@ -321,7 +420,7 @@ def update_live_inventory(
                 estimated_quantity,
 
                 "unit":
-                "lbs",
+                "each",
 
                 "par_level":
                 20,
@@ -365,10 +464,6 @@ async def scan_inventory(
 
         print("SCAN STARTED")
 
-        # -----------------------------
-        # READ IMAGE
-        # -----------------------------
-
         image_bytes = await file.read()
 
         base64_image = (
@@ -379,10 +474,6 @@ async def scan_inventory(
 
             .decode("utf-8")
         )
-
-        # -----------------------------
-        # OPENAI REQUEST
-        # -----------------------------
 
         response = (
 
@@ -440,9 +531,6 @@ async def scan_inventory(
             .content
         )
 
-        print("RAW AI RESULT:")
-        print(raw_result)
-
         cleaned_result = clean_json(
             raw_result
         )
@@ -450,13 +538,6 @@ async def scan_inventory(
         ai_products = json.loads(
             cleaned_result
         )
-
-        print("AI PRODUCTS:")
-        print(ai_products)
-
-        # -----------------------------
-        # CREATE SCAN RECORD
-        # -----------------------------
 
         scan_insert = (
 
@@ -484,14 +565,7 @@ async def scan_inventory(
 
         processed_products = []
 
-        # -----------------------------
-        # PROCESS PRODUCTS
-        # -----------------------------
-
         for item in ai_products:
-
-            print("PROCESSING ITEM:")
-            print(item)
 
             product_name = item.get(
                 "product_name",
@@ -523,44 +597,37 @@ async def scan_inventory(
                 is not None
             )
 
-            # -------------------------
-            # SAVE INVENTORY ITEM
-            # -------------------------
-
-            insert_response = (
-
-                supabase.table(
-                    "inventory_items"
+            enrichment = (
+                enrich_product_data(
+                    product_name
                 )
-
-                .insert({
-
-                    "inventory_scan_id":
-                    inventory_scan_id,
-
-                    "canonical_product_id":
-                    canonical_product_id,
-
-                    "estimated_quantity":
-                    estimated_quantity,
-
-                    "confidence":
-                    confidence
-
-                })
-
-                .execute()
             )
 
-            print(
-                "ITEM INSERTED:"
+            suggested_category = (
+                enrichment["category"]
             )
 
-            print(insert_response.data)
+            suggested_base_unit = (
+                enrichment["base_unit"]
+            )
 
-            # -------------------------
-            # UPDATE LIVE INVENTORY
-            # -------------------------
+            supabase.table(
+                "inventory_items"
+            ).insert({
+
+                "inventory_scan_id":
+                inventory_scan_id,
+
+                "canonical_product_id":
+                canonical_product_id,
+
+                "estimated_quantity":
+                estimated_quantity,
+
+                "confidence":
+                confidence
+
+            }).execute()
 
             if matched_existing:
 
@@ -568,10 +635,6 @@ async def scan_inventory(
                     canonical_product_id,
                     estimated_quantity
                 )
-
-            # -------------------------
-            # FRONTEND RESPONSE
-            # -------------------------
 
             processed_products.append({
 
@@ -591,7 +654,13 @@ async def scan_inventory(
                 canonical_product_id,
 
                 "needs_creation":
-                canonical_product_id is None
+                canonical_product_id is None,
+
+                "suggested_category":
+                suggested_category,
+
+                "suggested_base_unit":
+                suggested_base_unit
             })
 
         return {
@@ -642,12 +711,30 @@ async def create_product(
             )
         )
 
+        category = (
+            product_data.get(
+                "category",
+                "Other"
+            )
+        )
+
+        base_unit = (
+            product_data.get(
+                "base_unit",
+                "each"
+            )
+        )
+
         canonical_product_id = (
             create_new_product(
 
                 product_name,
 
-                estimated_quantity
+                estimated_quantity,
+
+                category,
+
+                base_unit
             )
         )
 
