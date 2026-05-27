@@ -1,14 +1,15 @@
 from fastapi import FastAPI, UploadFile
-from openai import OpenAI
 from supabase import create_client
+from openai import OpenAI
 
 import base64
 import json
+import uuid
 import os
 
-# -----------------------------------
-# ENVIRONMENT VARIABLES
-# -----------------------------------
+# ==========================================
+# ENV VARIABLES
+# ==========================================
 
 SUPABASE_URL = os.getenv(
     "SUPABASE_URL"
@@ -22,438 +23,120 @@ OPENAI_API_KEY = os.getenv(
     "OPENAI_API_KEY"
 )
 
-# -----------------------------------
-# SUPABASE CLIENT
-# -----------------------------------
+# ==========================================
+# CLIENTS
+# ==========================================
 
 supabase = create_client(
     SUPABASE_URL,
     SUPABASE_KEY,
 )
 
-# -----------------------------------
-# OPENAI CLIENT
-# -----------------------------------
-
 client = OpenAI(
     api_key=OPENAI_API_KEY
 )
 
-# -----------------------------------
-# FASTAPI APP
-# -----------------------------------
+# ==========================================
+# FASTAPI
+# ==========================================
 
 app = FastAPI()
 
-# -----------------------------------
-# RESTAURANT ID
-# -----------------------------------
-
-RESTAURANT_ID = (
-    "486f4c9d-dcdd-4d8e-9f40-97c733182a5e"
-)
-
-# -----------------------------------
-# CLEAN OPENAI JSON
-# -----------------------------------
-
-def clean_json(raw_text):
-
-    return (
-
-        raw_text
-
-        .replace(
-            "```json",
-            ""
-        )
-
-        .replace(
-            "```",
-            ""
-        )
-
-        .strip()
-    )
-
-# -----------------------------------
-# AI PRODUCT ENRICHMENT
-# -----------------------------------
-
-def enrich_product_data(
-    product_name
-):
-
-    try:
-
-        enrichment_response = (
-
-            client.chat.completions.create(
-
-                model="gpt-4.1-mini",
-
-                messages=[
-
-                    {
-                        "role": "user",
-
-                        "content":
-                        f"""
-
-                        Given this restaurant inventory item:
-
-                        {product_name}
-
-                        Determine:
-
-                        1. Best inventory category
-                        2. Best base unit
-
-                        Return ONLY valid JSON.
-
-                        Example:
-
-                        {{
-                          "category": "Produce",
-                          "base_unit": "lbs"
-                        }}
-                        """
-                    }
-                ]
-            )
-        )
-
-        enrichment_raw = (
-
-            enrichment_response
-            .choices[0]
-            .message
-            .content
-        )
-
-        enrichment_cleaned = (
-            clean_json(
-                enrichment_raw
-            )
-        )
-
-        enrichment_data = json.loads(
-            enrichment_cleaned
-        )
-
-        return {
-
-            "category":
-            enrichment_data.get(
-                "category",
-                "Other"
-            ),
-
-            "base_unit":
-            enrichment_data.get(
-                "base_unit",
-                "each"
-            )
-        }
-
-    except Exception as e:
-
-        print(
-            "ENRICHMENT ERROR:"
-        )
-
-        print(str(e))
-
-        return {
-
-            "category":
-            "Other",
-
-            "base_unit":
-            "each"
-        }
-
-# -----------------------------------
-# MATCH PRODUCT
-# -----------------------------------
-
-def match_product(product_name):
-
-    try:
-
-        response = (
-
-            supabase.table(
-                "product_aliases"
-            )
-
-            .select("*")
-
-            .execute()
-        )
-
-        aliases = response.data
-
-        product_name_lower = (
-            product_name.lower().strip()
-        )
-
-        for alias in aliases:
-
-            raw_name = (
-
-                alias[
-                    "raw_product_name"
-                ]
-
-                .lower()
-
-                .strip()
-            )
-
-            if (
-
-                raw_name
-                in
-                product_name_lower
-
-                or
-
-                product_name_lower
-                in
-                raw_name
-            ):
-
-                return alias[
-                    "canonical_product_id"
-                ]
-
-        return None
-
-    except Exception as e:
-
-        print(
-            "MATCH ERROR:"
-        )
-
-        print(str(e))
-
-        return None
-
-# -----------------------------------
-# CREATE NEW PRODUCT
-# -----------------------------------
-
-def create_new_product(
-    product_name,
-    estimated_quantity,
-    category,
-    base_unit
-):
-
-    try:
-
-        canonical_insert = (
-
-            supabase.table(
-                "canonical_products"
-            )
-
-            .insert({
-
-                "canonical_name":
-                product_name,
-
-                "category":
-                category,
-
-                "base_unit":
-                base_unit,
-
-                "created_by_ai":
-                True,
-
-                "ai_confidence":
-                0.9
-
-            })
-
-            .execute()
-        )
-
-        canonical_product_id = (
-
-            canonical_insert
-            .data[0]["id"]
-        )
-
-        # -----------------------------
-        # CREATE ALIAS
-        # -----------------------------
-
-        supabase.table(
-            "product_aliases"
-        ).insert({
-
-            "raw_product_name":
-            product_name,
-
-            "canonical_product_id":
-            canonical_product_id
-
-        }).execute()
-
-        # -----------------------------
-        # CREATE LIVE INVENTORY
-        # -----------------------------
-
-        supabase.table(
-            "live_inventory"
-        ).insert({
-
-            "restaurant_id":
-            RESTAURANT_ID,
-
-            "canonical_product_id":
-            canonical_product_id,
-
-            "current_quantity":
-            estimated_quantity,
-
-            "unit":
-            base_unit,
-
-            "par_level":
-            20,
-
-            "reorder_threshold":
-            5
-
-        }).execute()
-
-        return canonical_product_id
-
-    except Exception as e:
-
-        print(
-            "CREATE PRODUCT ERROR:"
-        )
-
-        print(str(e))
-
-        return None
-
-# -----------------------------------
-# UPDATE LIVE INVENTORY
-# -----------------------------------
-
-def update_live_inventory(
-    canonical_product_id,
-    estimated_quantity
-):
-
-    try:
-
-        existing_inventory = (
-
-            supabase.table(
-                "live_inventory"
-            )
-
-            .select("*")
-
-            .eq(
-                "canonical_product_id",
-                canonical_product_id
-            )
-
-            .execute()
-        )
-
-        if existing_inventory.data:
-
-            existing_item = (
-                existing_inventory
-                .data[0]
-            )
-
-            current_quantity = float(
-
-                existing_item[
-                    "current_quantity"
-                ]
-            )
-
-            new_quantity = (
-                current_quantity
-                +
-                estimated_quantity
-            )
-
-            supabase.table(
-                "live_inventory"
-            ).update({
-
-                "current_quantity":
-                new_quantity
-
-            }).eq(
-
-                "id",
-                existing_item["id"]
-
-            ).execute()
-
-        else:
-
-            supabase.table(
-                "live_inventory"
-            ).insert({
-
-                "restaurant_id":
-                RESTAURANT_ID,
-
-                "canonical_product_id":
-                canonical_product_id,
-
-                "current_quantity":
-                estimated_quantity,
-
-                "unit":
-                "each",
-
-                "par_level":
-                20,
-
-                "reorder_threshold":
-                5
-
-            }).execute()
-
-    except Exception as e:
-
-        print(
-            "LIVE INVENTORY ERROR:"
-        )
-
-        print(str(e))
-
-# -----------------------------------
-# ROOT ROUTE
-# -----------------------------------
+# ==========================================
+# HEALTH CHECK
+# ==========================================
 
 @app.get("/")
 async def root():
 
     return {
-
         "status":
         "Restaurant Inventory AI Backend Running"
     }
 
-# -----------------------------------
-# SCAN INVENTORY
-# -----------------------------------
+# ==========================================
+# CATEGORY OPTIONS
+# ==========================================
+
+CATEGORY_OPTIONS = [
+
+    "Produce",
+
+    "Dairy",
+
+    "Meat",
+
+    "Seafood",
+
+    "Frozen",
+
+    "Dry Storage",
+
+    "Bakery",
+
+    "Beverages",
+
+    "Beer",
+
+    "Wine",
+
+    "Liquor",
+
+    "Non-Alcoholic Drinks",
+
+    "Paper Goods",
+
+    "Cleaning",
+
+    "Other",
+]
+
+# ==========================================
+# BASE UNIT OPTIONS
+# ==========================================
+
+BASE_UNIT_OPTIONS = [
+
+    "lbs",
+
+    "each",
+
+    "case",
+
+    "oz",
+
+    "gallon",
+
+    "bag",
+
+    "box",
+
+    "bottle",
+
+    "can",
+]
+
+# ==========================================
+# HELPER
+# ==========================================
+
+def clean_json(content):
+
+    content = content.replace(
+        "```json",
+        ""
+    )
+
+    content = content.replace(
+        "```",
+        ""
+    )
+
+    return content.strip()
+
+# ==========================================
+# INVENTORY SCAN
+# ==========================================
 
 @app.post("/scan")
 async def scan_inventory(
@@ -462,164 +145,233 @@ async def scan_inventory(
 
     try:
 
-        print("SCAN STARTED")
-
         image_bytes = await file.read()
 
-        base64_image = (
+        base64_image = base64.b64encode(
+            image_bytes
+        ).decode("utf-8")
 
-            base64.b64encode(
-                image_bytes
-            )
+        response = client.chat.completions.create(
 
-            .decode("utf-8")
-        )
+            model="gpt-4.1-mini",
 
-        response = (
+            messages=[
 
-            client.chat.completions.create(
+                {
+                    "role": "user",
 
-                model="gpt-4.1-mini",
+                    "content": [
 
-                messages=[
+                        {
+                            "type": "text",
 
-                    {
-                        "role": "user",
+                            "text": f"""
+                            Identify all visible restaurant inventory items.
 
-                        "content": [
+                            Return ONLY valid JSON.
 
-                            {
-                                "type": "text",
+                            Format:
 
-                                "text": """
-                                Identify all visible restaurant inventory items.
+                            [
+                              {{
+                                "product_name": "",
+                                "estimated_quantity": 0,
+                                "confidence": 0.0,
+                                "suggested_category": "",
+                                "suggested_base_unit": ""
+                              }}
+                            ]
 
-                                Return ONLY valid JSON.
+                            Possible categories:
 
-                                Format:
+                            {CATEGORY_OPTIONS}
 
-                                [
-                                  {
-                                    "product_name": "",
-                                    "estimated_quantity": 0,
-                                    "confidence": 0.0
-                                  }
-                                ]
-                                """
-                            },
+                            Possible base units:
 
-                            {
-                                "type": "image_url",
+                            {BASE_UNIT_OPTIONS}
+                            """
+                        },
 
-                                "image_url": {
+                        {
+                            "type": "image_url",
 
-                                    "url":
-                                    f"data:image/jpeg;base64,{base64_image}"
-                                }
+                            "image_url": {
+                                "url":
+                                f"data:image/jpeg;base64,{base64_image}"
                             }
-                        ]
-                    }
-                ]
-            )
+                        }
+                    ]
+                }
+            ]
         )
 
-        raw_result = (
+        content = response.choices[
+            0
+        ].message.content
 
-            response
-            .choices[0]
-            .message
-            .content
+        cleaned = clean_json(
+            content
         )
 
-        cleaned_result = clean_json(
-            raw_result
+        items = json.loads(
+            cleaned
         )
 
-        ai_products = json.loads(
-            cleaned_result
-        )
+        final_results = []
 
-        scan_insert = (
-
-            supabase.table(
-                "inventory_scans"
-            )
-
-            .insert({
-
-                "restaurant_id":
-                RESTAURANT_ID,
-
-                "image_url":
-                "temporary"
-
-            })
-
-            .execute()
-        )
-
-        inventory_scan_id = (
-            scan_insert
-            .data[0]["id"]
-        )
-
-        processed_products = []
-
-        for item in ai_products:
+        for item in items:
 
             product_name = item.get(
                 "product_name",
                 ""
+            ).strip()
+
+            estimated_quantity = item.get(
+                "estimated_quantity",
+                1
             )
 
-            estimated_quantity = float(
-                item.get(
-                    "estimated_quantity",
+            confidence = item.get(
+                "confidence",
+                0.0
+            )
+
+            suggested_category = item.get(
+                "suggested_category",
+                "Other"
+            )
+
+            suggested_base_unit = item.get(
+                "suggested_base_unit",
+                "each"
+            )
+
+            # =====================================
+            # CHECK ALIASES
+            # =====================================
+
+            alias_response = supabase.table(
+                "product_aliases"
+            ).select(
+                "*"
+            ).ilike(
+                "alias_name",
+                product_name
+            ).execute()
+
+            matched_existing = False
+
+            canonical_product = None
+
+            if alias_response.data:
+
+                matched_existing = True
+
+                alias = alias_response.data[
                     0
-                )
-            )
+                ]
 
-            confidence = float(
-                item.get(
-                    "confidence",
-                    0
-                )
-            )
+                canonical_id = alias[
+                    "canonical_product_id"
+                ]
 
-            canonical_product_id = (
-                match_product(
-                    product_name
-                )
-            )
+                canonical_response = supabase.table(
+                    "canonical_products"
+                ).select(
+                    "*"
+                ).eq(
+                    "id",
+                    canonical_id
+                ).execute()
 
-            matched_existing = (
-                canonical_product_id
-                is not None
-            )
+                if canonical_response.data:
 
-            enrichment = (
-                enrich_product_data(
-                    product_name
-                )
-            )
+                    canonical_product = (
+                        canonical_response.data[
+                            0
+                        ]
+                    )
 
-            suggested_category = (
-                enrichment["category"]
-            )
+            # =====================================
+            # CREATE INVENTORY ITEM
+            # =====================================
 
-            suggested_base_unit = (
-                enrichment["base_unit"]
-            )
+            if matched_existing and canonical_product:
+
+                existing_inventory = supabase.table(
+                    "live_inventory"
+                ).select(
+                    "*"
+                ).eq(
+                    "canonical_product_id",
+                    canonical_product["id"]
+                ).execute()
+
+                if existing_inventory.data:
+
+                    current_quantity = (
+                        existing_inventory.data[
+                            0
+                        ][
+                            "current_quantity"
+                        ]
+                    )
+
+                    updated_quantity = (
+                        current_quantity
+                        + estimated_quantity
+                    )
+
+                    supabase.table(
+                        "live_inventory"
+                    ).update({
+
+                        "current_quantity":
+                        updated_quantity
+
+                    }).eq(
+
+                        "canonical_product_id",
+                        canonical_product["id"]
+
+                    ).execute()
+
+                else:
+
+                    supabase.table(
+                        "live_inventory"
+                    ).insert({
+
+                        "canonical_product_id":
+                        canonical_product["id"],
+
+                        "current_quantity":
+                        estimated_quantity,
+
+                        "unit":
+                        canonical_product.get(
+                            "base_unit",
+                            suggested_base_unit
+                        ),
+
+                        "par_level":
+                        0,
+
+                        "reorder_threshold":
+                        0
+
+                    }).execute()
+
+            # =====================================
+            # STORE SCAN HISTORY
+            # =====================================
 
             supabase.table(
-                "inventory_items"
+                "inventory_scans"
             ).insert({
 
-                "inventory_scan_id":
-                inventory_scan_id,
-
-                "canonical_product_id":
-                canonical_product_id,
+                "product_name":
+                product_name,
 
                 "estimated_quantity":
                 estimated_quantity,
@@ -629,14 +381,7 @@ async def scan_inventory(
 
             }).execute()
 
-            if matched_existing:
-
-                update_live_inventory(
-                    canonical_product_id,
-                    estimated_quantity
-                )
-
-            processed_products.append({
+            final_results.append({
 
                 "product_name":
                 product_name,
@@ -647,37 +392,30 @@ async def scan_inventory(
                 "confidence":
                 confidence,
 
-                "matched_existing":
-                matched_existing,
-
-                "canonical_product_id":
-                canonical_product_id,
-
-                "needs_creation":
-                canonical_product_id is None,
-
                 "suggested_category":
                 suggested_category,
 
                 "suggested_base_unit":
-                suggested_base_unit
+                suggested_base_unit,
+
+                "matched_existing":
+                matched_existing,
+
+                "needs_creation":
+                not matched_existing
             })
 
         return {
 
             "success": True,
 
-            "inventory_scan_id":
-            inventory_scan_id,
-
             "result":
-            processed_products
+            final_results
         }
 
     except Exception as e:
 
-        print("SCAN ERROR:")
-        print(str(e))
+        print(e)
 
         return {
 
@@ -686,73 +424,115 @@ async def scan_inventory(
             "error": str(e)
         }
 
-# -----------------------------------
+# ==========================================
 # CREATE PRODUCT
-# -----------------------------------
+# ==========================================
 
 @app.post("/create_product")
 async def create_product(
-    product_data: dict
+    payload: dict
 ):
 
     try:
 
-        product_name = (
-            product_data[
-                "product_name"
-            ]
+        product_name = payload.get(
+            "product_name"
         )
 
-        estimated_quantity = float(
-
-            product_data.get(
-                "estimated_quantity",
-                0
-            )
+        estimated_quantity = payload.get(
+            "estimated_quantity",
+            1
         )
 
-        category = (
-            product_data.get(
-                "category",
-                "Other"
-            )
+        category = payload.get(
+            "category",
+            "Other"
         )
 
-        base_unit = (
-            product_data.get(
-                "base_unit",
-                "each"
-            )
+        base_unit = payload.get(
+            "base_unit",
+            "each"
         )
 
-        canonical_product_id = (
-            create_new_product(
+        # =====================================
+        # CREATE CANONICAL PRODUCT
+        # =====================================
 
-                product_name,
+        canonical_response = supabase.table(
+            "canonical_products"
+        ).insert({
 
-                estimated_quantity,
+            "canonical_name":
+            product_name,
 
-                category,
+            "category":
+            category,
 
-                base_unit
-            )
+            "base_unit":
+            base_unit
+
+        }).execute()
+
+        canonical_product = (
+            canonical_response.data[0]
         )
+
+        canonical_id = canonical_product[
+            "id"
+        ]
+
+        # =====================================
+        # CREATE ALIAS
+        # =====================================
+
+        supabase.table(
+            "product_aliases"
+        ).insert({
+
+            "alias_name":
+            product_name,
+
+            "canonical_product_id":
+            canonical_id
+
+        }).execute()
+
+        # =====================================
+        # CREATE LIVE INVENTORY
+        # =====================================
+
+        supabase.table(
+            "live_inventory"
+        ).insert({
+
+            "canonical_product_id":
+            canonical_id,
+
+            "current_quantity":
+            estimated_quantity,
+
+            "unit":
+            base_unit,
+
+            "par_level":
+            0,
+
+            "reorder_threshold":
+            0
+
+        }).execute()
 
         return {
 
             "success": True,
 
-            "canonical_product_id":
-            canonical_product_id
+            "canonical_product":
+            canonical_product
         }
 
     except Exception as e:
 
-        print(
-            "CREATE PRODUCT ENDPOINT ERROR:"
-        )
-
-        print(str(e))
+        print(e)
 
         return {
 
@@ -761,9 +541,9 @@ async def create_product(
             "error": str(e)
         }
 
-# -----------------------------------
-# INVOICE SCANNER
-# -----------------------------------
+# ==========================================
+# INVOICE SCAN
+# ==========================================
 
 @app.post("/scan_invoice")
 async def scan_invoice(
@@ -774,81 +554,221 @@ async def scan_invoice(
 
         image_bytes = await file.read()
 
-        base64_image = (
+        base64_image = base64.b64encode(
+            image_bytes
+        ).decode("utf-8")
 
-            base64.b64encode(
-                image_bytes
-            )
+        response = client.chat.completions.create(
 
-            .decode("utf-8")
-        )
+            model="gpt-4.1-mini",
 
-        response = (
+            messages=[
 
-            client.chat.completions.create(
+                {
+                    "role": "user",
 
-                model="gpt-4.1-mini",
+                    "content": [
 
-                messages=[
+                        {
+                            "type": "text",
 
-                    {
-                        "role": "user",
+                            "text": """
+                            This is a restaurant invoice.
 
-                        "content": [
+                            Extract ALL visible invoice items.
 
-                            {
-                                "type": "text",
+                            Return ONLY valid JSON.
 
-                                "text": """
-                                Extract invoice data.
+                            Format:
 
-                                Return ONLY valid JSON.
-                                """
-                            },
+                            [
+                              {
+                                "product_name": "",
+                                "quantity": 0,
+                                "unit_price": 0,
+                                "total_price": 0
+                              }
+                            ]
+                            """
+                        },
 
-                            {
-                                "type": "image_url",
+                        {
+                            "type": "image_url",
 
-                                "image_url": {
-
-                                    "url":
-                                    f"data:image/jpeg;base64,{base64_image}"
-                                }
+                            "image_url": {
+                                "url":
+                                f"data:image/jpeg;base64,{base64_image}"
                             }
-                        ]
-                    }
-                ]
+                        }
+                    ]
+                }
+            ]
+        )
+
+        content = response.choices[
+            0
+        ].message.content
+
+        cleaned = clean_json(
+            content
+        )
+
+        invoice_items = json.loads(
+            cleaned
+        )
+
+        final_results = []
+
+        # =====================================
+        # CREATE INVOICE
+        # =====================================
+
+        invoice_id = str(
+            uuid.uuid4()
+        )
+
+        supabase.table(
+            "invoices"
+        ).insert({
+
+            "id":
+            invoice_id
+
+        }).execute()
+
+        # =====================================
+        # PROCESS ITEMS
+        # =====================================
+
+        for item in invoice_items:
+
+            product_name = item.get(
+                "product_name",
+                ""
             )
-        )
 
-        raw_result = (
+            quantity = item.get(
+                "quantity",
+                1
+            )
 
-            response
-            .choices[0]
-            .message
-            .content
-        )
+            unit_price = item.get(
+                "unit_price",
+                0
+            )
 
-        cleaned_result = clean_json(
-            raw_result
-        )
+            total_price = item.get(
+                "total_price",
+                0
+            )
 
-        invoice_data = json.loads(
-            cleaned_result
-        )
+            alias_response = supabase.table(
+                "product_aliases"
+            ).select(
+                "*"
+            ).ilike(
+                "alias_name",
+                product_name
+            ).execute()
+
+            canonical_product_id = None
+
+            if alias_response.data:
+
+                canonical_product_id = (
+                    alias_response.data[0][
+                        "canonical_product_id"
+                    ]
+                )
+
+                inventory_response = supabase.table(
+                    "live_inventory"
+                ).select(
+                    "*"
+                ).eq(
+                    "canonical_product_id",
+                    canonical_product_id
+                ).execute()
+
+                if inventory_response.data:
+
+                    current_quantity = (
+                        inventory_response.data[
+                            0
+                        ][
+                            "current_quantity"
+                        ]
+                    )
+
+                    updated_quantity = (
+                        current_quantity
+                        + quantity
+                    )
+
+                    supabase.table(
+                        "live_inventory"
+                    ).update({
+
+                        "current_quantity":
+                        updated_quantity
+
+                    }).eq(
+
+                        "canonical_product_id",
+                        canonical_product_id
+
+                    ).execute()
+
+            supabase.table(
+                "invoice_items"
+            ).insert({
+
+                "invoice_id":
+                invoice_id,
+
+                "product_name":
+                product_name,
+
+                "quantity":
+                quantity,
+
+                "unit_price":
+                unit_price,
+
+                "total_price":
+                total_price,
+
+                "canonical_product_id":
+                canonical_product_id
+
+            }).execute()
+
+            final_results.append({
+
+                "product_name":
+                product_name,
+
+                "quantity":
+                quantity,
+
+                "unit_price":
+                unit_price,
+
+                "total_price":
+                total_price
+            })
 
         return {
 
             "success": True,
 
             "result":
-            invoice_data
+            final_results
         }
 
     except Exception as e:
 
-        print("INVOICE ERROR:")
-        print(str(e))
+        print(e)
 
         return {
 
