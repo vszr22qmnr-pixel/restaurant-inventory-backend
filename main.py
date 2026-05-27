@@ -121,6 +121,7 @@ BASE_UNIT_OPTIONS = [
 # ==========================================
 
 def clean_json(content):
+
     content = content.replace(
         "```json",
         ""
@@ -133,7 +134,7 @@ def clean_json(content):
 
     return content.strip()
 
-    # ==========================================
+# ==========================================
 # AI SEMANTIC PRODUCT MATCHING
 # ==========================================
 
@@ -191,17 +192,17 @@ def semantic_match_product(
                     "content": """
                     You are an expert restaurant inventory AI.
 
-                    Your job is to determine if a scanned product
-                    semantically matches an existing canonical product.
+                    Determine if the scanned product
+                    semantically matches an existing
+                    canonical product.
 
                     Consider:
                     - abbreviations
                     - OCR mistakes
                     - vendor shorthand
-                    - pack sizes
-                    - naming variations
                     - plural/singular
                     - brand variations
+                    - pack size naming
 
                     Return ONLY valid JSON.
                     """
@@ -215,7 +216,7 @@ def semantic_match_product(
 
                     {scanned_name}
 
-                    Existing Canonical Products:
+                    Existing Products:
 
                     {json.dumps(product_list)}
 
@@ -232,8 +233,6 @@ def semantic_match_product(
                     {{
                       "matched": false
                     }}
-
-                    ONLY match if confidence is high.
                     """
                 }
             ]
@@ -255,16 +254,16 @@ def semantic_match_product(
             "matched"
         ) == True:
 
-            matched_id = result.get(
-                "canonical_product_id"
-            )
-
             confidence = result.get(
                 "confidence",
                 0.0
             )
 
             if confidence >= 0.80:
+
+                matched_id = result.get(
+                    "canonical_product_id"
+                )
 
                 matched_product = next(
 
@@ -292,7 +291,6 @@ def semantic_match_product(
 
         return None
 
-    
 # ==========================================
 # INVENTORY SCAN
 # ==========================================
@@ -405,8 +403,12 @@ async def scan_inventory(
                 "each"
             )
 
+            matched_existing = False
+
+            canonical_product = None
+
             # =====================================
-            # CHECK ALIASES
+            # EXACT ALIAS MATCH
             # =====================================
 
             alias_response = supabase.table(
@@ -417,10 +419,6 @@ async def scan_inventory(
                 "alias_name",
                 product_name
             ).execute()
-
-            matched_existing = False
-
-            canonical_product = None
 
             if alias_response.data:
 
@@ -452,7 +450,50 @@ async def scan_inventory(
                     )
 
             # =====================================
-            # CREATE INVENTORY ITEM
+            # AI SEMANTIC MATCH
+            # =====================================
+
+            if not matched_existing:
+
+                semantic_match = (
+                    semantic_match_product(
+                        product_name
+                    )
+                )
+
+                if semantic_match:
+
+                    matched_existing = True
+
+                    canonical_product = (
+                        semantic_match
+                    )
+
+                    existing_alias = supabase.table(
+                        "product_aliases"
+                    ).select(
+                        "*"
+                    ).ilike(
+                        "alias_name",
+                        product_name
+                    ).execute()
+
+                    if not existing_alias.data:
+
+                        supabase.table(
+                            "product_aliases"
+                        ).insert({
+
+                            "alias_name":
+                            product_name,
+
+                            "canonical_product_id":
+                            semantic_match["id"]
+
+                        }).execute()
+
+            # =====================================
+            # UPDATE LIVE INVENTORY
             # =====================================
 
             if matched_existing and canonical_product:
@@ -522,7 +563,7 @@ async def scan_inventory(
                     }).execute()
 
             # =====================================
-            # STORE SCAN HISTORY
+            # STORE INVENTORY SCAN
             # =====================================
 
             supabase.table(
@@ -613,10 +654,6 @@ async def create_product(
             "each"
         )
 
-        # =====================================
-        # CREATE CANONICAL PRODUCT
-        # =====================================
-
         canonical_response = supabase.table(
             "canonical_products"
         ).insert({
@@ -640,10 +677,6 @@ async def create_product(
             "id"
         ]
 
-        # =====================================
-        # CREATE ALIAS
-        # =====================================
-
         supabase.table(
             "product_aliases"
         ).insert({
@@ -655,10 +688,6 @@ async def create_product(
             canonical_id
 
         }).execute()
-
-        # =====================================
-        # CREATE LIVE INVENTORY
-        # =====================================
 
         supabase.table(
             "live_inventory"
@@ -778,10 +807,6 @@ async def scan_invoice(
 
         final_results = []
 
-        # =====================================
-        # CREATE INVOICE
-        # =====================================
-
         invoice_id = str(
             uuid.uuid4()
         )
@@ -794,10 +819,6 @@ async def scan_invoice(
             invoice_id
 
         }).execute()
-
-        # =====================================
-        # PROCESS ITEMS
-        # =====================================
 
         for item in invoice_items:
 
@@ -821,6 +842,12 @@ async def scan_invoice(
                 0
             )
 
+            canonical_product_id = None
+
+            # =====================================
+            # EXACT ALIAS MATCH
+            # =====================================
+
             alias_response = supabase.table(
                 "product_aliases"
             ).select(
@@ -830,8 +857,6 @@ async def scan_invoice(
                 product_name
             ).execute()
 
-            canonical_product_id = None
-
             if alias_response.data:
 
                 canonical_product_id = (
@@ -839,6 +864,53 @@ async def scan_invoice(
                         "canonical_product_id"
                     ]
                 )
+
+            # =====================================
+            # AI SEMANTIC MATCH
+            # =====================================
+
+            if not canonical_product_id:
+
+                semantic_match = (
+                    semantic_match_product(
+                        product_name
+                    )
+                )
+
+                if semantic_match:
+
+                    canonical_product_id = (
+                        semantic_match["id"]
+                    )
+
+                    existing_alias = supabase.table(
+                        "product_aliases"
+                    ).select(
+                        "*"
+                    ).ilike(
+                        "alias_name",
+                        product_name
+                    ).execute()
+
+                    if not existing_alias.data:
+
+                        supabase.table(
+                            "product_aliases"
+                        ).insert({
+
+                            "alias_name":
+                            product_name,
+
+                            "canonical_product_id":
+                            canonical_product_id
+
+                        }).execute()
+
+            # =====================================
+            # UPDATE LIVE INVENTORY
+            # =====================================
+
+            if canonical_product_id:
 
                 inventory_response = supabase.table(
                     "live_inventory"
@@ -877,6 +949,10 @@ async def scan_invoice(
                         canonical_product_id
 
                     ).execute()
+
+            # =====================================
+            # STORE INVOICE ITEM
+            # =====================================
 
             supabase.table(
                 "invoice_items"
