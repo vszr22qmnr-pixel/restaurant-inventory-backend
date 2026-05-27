@@ -115,6 +115,108 @@ def clean_json(content):
     return content.strip()
 
 # ==========================================
+# AI CATEGORY + UNIT SUGGESTION
+# ==========================================
+
+def get_ai_product_metadata(
+    product_name,
+    fallback_unit="each"
+):
+
+    try:
+
+        response = client.chat.completions.create(
+
+            model="gpt-4.1-mini",
+
+            messages=[
+
+                {
+                    "role": "system",
+
+                    "content": """
+                    You are a restaurant inventory AI.
+
+                    Determine:
+                    - best category
+                    - best base unit
+
+                    Return ONLY JSON.
+                    """
+                },
+
+                {
+                    "role": "user",
+
+                    "content": f"""
+                    Product:
+                    {product_name}
+
+                    Categories:
+                    {CATEGORY_OPTIONS}
+
+                    Base Units:
+                    {BASE_UNIT_OPTIONS}
+
+                    Return:
+
+                    {{
+                      "category": "",
+                      "base_unit": ""
+                    }}
+                    """
+                }
+            ]
+        )
+
+        raw = (
+            response
+            .choices[0]
+            .message
+            .content
+        )
+
+        cleaned = clean_json(
+            raw
+        )
+
+        data = json.loads(
+            cleaned
+        )
+
+        return {
+
+            "category":
+            data.get(
+                "category",
+                "Other"
+            ),
+
+            "base_unit":
+            data.get(
+                "base_unit",
+                fallback_unit
+            )
+        }
+
+    except Exception as e:
+
+        print(
+            "AI METADATA ERROR"
+        )
+
+        print(e)
+
+        return {
+
+            "category":
+            "Other",
+
+            "base_unit":
+            fallback_unit
+        }
+
+# ==========================================
 # SEMANTIC PRODUCT MATCHING
 # ==========================================
 
@@ -147,11 +249,11 @@ def semantic_match_product(
                     "content": """
                     You are an expert restaurant inventory AI.
 
-                    Match vendor shorthand,
-                    invoice abbreviations,
-                    OCR mistakes,
-                    and alternate naming
-                    to canonical restaurant inventory products.
+                    Match:
+                    - vendor shorthand
+                    - invoice abbreviations
+                    - OCR mistakes
+                    - alternate naming
 
                     Return ONLY JSON.
                     """
@@ -241,7 +343,96 @@ def semantic_match_product(
         return None
 
 # ==========================================
-# INVENTORY SCAN
+# CREATE NEW PRODUCT
+# ==========================================
+
+def create_new_product(
+    product_name,
+    quantity,
+    unit
+):
+
+    ai_data = get_ai_product_metadata(
+        product_name,
+        unit
+    )
+
+    category = ai_data[
+        "category"
+    ]
+
+    base_unit = ai_data[
+        "base_unit"
+    ]
+
+    canonical_response = supabase.table(
+        "canonical_products"
+    ).insert({
+
+        "canonical_name":
+        product_name,
+
+        "category":
+        category,
+
+        "base_unit":
+        base_unit
+
+    }).execute()
+
+    canonical_product = (
+        canonical_response.data[0]
+    )
+
+    canonical_id = canonical_product[
+        "id"
+    ]
+
+    # ======================================
+    # CREATE PRODUCT ALIAS
+    # ======================================
+
+    supabase.table(
+        "product_aliases"
+    ).insert({
+
+        "raw_product_name":
+        product_name,
+
+        "canonical_product_id":
+        canonical_id
+
+    }).execute()
+
+    # ======================================
+    # INSERT INTO LIVE INVENTORY
+    # ======================================
+
+    supabase.table(
+        "live_inventory"
+    ).insert({
+
+        "canonical_product_id":
+        canonical_id,
+
+        "current_quantity":
+        quantity,
+
+        "unit":
+        base_unit,
+
+        "par_level":
+        0,
+
+        "reorder_threshold":
+        0
+
+    }).execute()
+
+    return canonical_product
+
+# ==========================================
+# INVENTORY IMAGE SCAN
 # ==========================================
 
 @app.post("/scan")
@@ -271,21 +462,19 @@ async def scan_inventory(
                         {
                             "type": "text",
 
-                            "text": f"""
+                            "text": """
                             Identify all inventory items.
 
                             Return ONLY JSON.
 
-                            Format:
-
                             [
-                              {{
+                              {
                                 "product_name": "",
                                 "estimated_quantity": 0,
                                 "confidence": 0.0,
                                 "suggested_category": "",
                                 "suggested_base_unit": ""
-                              }}
+                              }
                             ]
                             """
                         },
@@ -303,7 +492,7 @@ async def scan_inventory(
             ]
         )
 
-        raw_result = (
+        raw = (
             response
             .choices[0]
             .message
@@ -311,7 +500,7 @@ async def scan_inventory(
         )
 
         cleaned = clean_json(
-            raw_result
+            raw
         )
 
         items = json.loads(
@@ -330,115 +519,6 @@ async def scan_inventory(
 
         print(
             "SCAN ERROR"
-        )
-
-        print(str(e))
-
-        return {
-
-            "success": False,
-
-            "error": str(e)
-        }
-
-# ==========================================
-# CREATE PRODUCT
-# ==========================================
-
-@app.post("/create_product")
-async def create_product(
-    payload: dict
-):
-
-    try:
-
-        product_name = payload.get(
-            "product_name"
-        )
-
-        estimated_quantity = payload.get(
-            "estimated_quantity",
-            1
-        )
-
-        category = payload.get(
-            "category",
-            "Other"
-        )
-
-        base_unit = payload.get(
-            "base_unit",
-            "each"
-        )
-
-        canonical_response = supabase.table(
-            "canonical_products"
-        ).insert({
-
-            "canonical_name":
-            product_name,
-
-            "category":
-            category,
-
-            "base_unit":
-            base_unit
-
-        }).execute()
-
-        canonical_product = (
-            canonical_response.data[0]
-        )
-
-        canonical_id = canonical_product[
-            "id"
-        ]
-
-        supabase.table(
-            "product_aliases"
-        ).insert({
-
-            "raw_product_name":
-            product_name,
-
-            "canonical_product_id":
-            canonical_id
-
-        }).execute()
-
-        supabase.table(
-            "live_inventory"
-        ).insert({
-
-            "canonical_product_id":
-            canonical_id,
-
-            "current_quantity":
-            estimated_quantity,
-
-            "unit":
-            base_unit,
-
-            "par_level":
-            0,
-
-            "reorder_threshold":
-            0
-
-        }).execute()
-
-        return {
-
-            "success": True,
-
-            "canonical_product":
-            canonical_product
-        }
-
-    except Exception as e:
-
-        print(
-            "CREATE PRODUCT ERROR"
         )
 
         print(str(e))
@@ -491,17 +571,6 @@ async def scan_invoice(
                             - price
 
                             Return ONLY JSON.
-
-                            Example:
-
-                            [
-                              {
-                                "product_name": "Limes",
-                                "quantity": 1,
-                                "unit": "case",
-                                "price": 62.00
-                              }
-                            ]
                             """
                         },
 
@@ -518,7 +587,7 @@ async def scan_invoice(
             ]
         )
 
-        raw_result = (
+        raw = (
             response
             .choices[0]
             .message
@@ -526,7 +595,7 @@ async def scan_invoice(
         )
 
         cleaned = clean_json(
-            raw_result
+            raw
         )
 
         invoice_items = json.loads(
@@ -557,6 +626,10 @@ async def scan_invoice(
                 0
             )
 
+            # ==================================
+            # SEMANTIC MATCH
+            # ==================================
+
             canonical_product = (
                 semantic_match_product(
                     product_name
@@ -565,70 +638,100 @@ async def scan_invoice(
 
             canonical_product_id = None
 
+            # ==================================
+            # EXISTING PRODUCT
+            # ==================================
+
             if canonical_product:
 
                 canonical_product_id = (
                     canonical_product["id"]
                 )
 
-                inventory_response = supabase.table(
+            # ==================================
+            # CREATE NEW PRODUCT
+            # ==================================
+
+            else:
+
+                created_product = (
+                    create_new_product(
+                        product_name,
+                        quantity,
+                        unit
+                    )
+                )
+
+                canonical_product_id = (
+                    created_product["id"]
+                )
+
+            # ==================================
+            # UPDATE LIVE INVENTORY
+            # ==================================
+
+            inventory_response = supabase.table(
+                "live_inventory"
+            ).select(
+                "*"
+            ).eq(
+                "canonical_product_id",
+                canonical_product_id
+            ).execute()
+
+            if inventory_response.data:
+
+                current_quantity = (
+                    inventory_response.data[0][
+                        "current_quantity"
+                    ]
+                )
+
+                updated_quantity = (
+                    current_quantity
+                    + quantity
+                )
+
+                supabase.table(
                     "live_inventory"
-                ).select(
-                    "*"
-                ).eq(
+                ).update({
+
+                    "current_quantity":
+                    updated_quantity
+
+                }).eq(
+
                     "canonical_product_id",
                     canonical_product_id
+
                 ).execute()
 
-                if inventory_response.data:
+            else:
 
-                    current_quantity = (
-                        inventory_response.data[0][
-                            "current_quantity"
-                        ]
-                    )
+                supabase.table(
+                    "live_inventory"
+                ).insert({
 
-                    updated_quantity = (
-                        current_quantity
-                        + quantity
-                    )
+                    "canonical_product_id":
+                    canonical_product_id,
 
-                    supabase.table(
-                        "live_inventory"
-                    ).update({
+                    "current_quantity":
+                    quantity,
 
-                        "current_quantity":
-                        updated_quantity
+                    "unit":
+                    unit,
 
-                    }).eq(
+                    "par_level":
+                    0,
 
-                        "canonical_product_id",
-                        canonical_product_id
+                    "reorder_threshold":
+                    0
 
-                    ).execute()
+                }).execute()
 
-                else:
-
-                    supabase.table(
-                        "live_inventory"
-                    ).insert({
-
-                        "canonical_product_id":
-                        canonical_product_id,
-
-                        "current_quantity":
-                        quantity,
-
-                        "unit":
-                        unit,
-
-                        "par_level":
-                        0,
-
-                        "reorder_threshold":
-                        0
-
-                    }).execute()
+            # ==================================
+            # STORE PROCESSED ITEM
+            # ==================================
 
             processed_items.append({
 
