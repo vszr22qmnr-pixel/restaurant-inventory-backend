@@ -5,6 +5,8 @@ from openai import OpenAI
 import base64
 import json
 import os
+import tempfile
+import cv2
 
 # ==========================================
 # ENV VARIABLES
@@ -40,18 +42,6 @@ client = OpenAI(
 # ==========================================
 
 app = FastAPI()
-
-# ==========================================
-# HEALTH CHECK
-# ==========================================
-
-@app.get("/")
-async def root():
-
-    return {
-        "status":
-        "Restaurant Inventory AI Backend Running"
-    }
 
 # ==========================================
 # CATEGORY OPTIONS
@@ -94,6 +84,18 @@ BASE_UNIT_OPTIONS = [
 ]
 
 # ==========================================
+# HEALTH CHECK
+# ==========================================
+
+@app.get("/")
+async def root():
+
+    return {
+        "status":
+        "Restaurant Inventory AI Backend Running"
+    }
+
+# ==========================================
 # JSON CLEANER
 # ==========================================
 
@@ -115,7 +117,7 @@ def clean_json(content):
     return content.strip()
 
 # ==========================================
-# AI CATEGORY + UNIT SUGGESTION
+# AI CATEGORY + UNIT
 # ==========================================
 
 def get_ai_product_metadata(
@@ -180,30 +182,11 @@ def get_ai_product_metadata(
             raw
         )
 
-        data = json.loads(
+        return json.loads(
             cleaned
         )
 
-        return {
-
-            "category":
-            data.get(
-                "category",
-                "Other"
-            ),
-
-            "base_unit":
-            data.get(
-                "base_unit",
-                fallback_unit
-            )
-        }
-
     except Exception as e:
-
-        print(
-            "AI METADATA ERROR"
-        )
 
         print(e)
 
@@ -217,7 +200,7 @@ def get_ai_product_metadata(
         }
 
 # ==========================================
-# SEMANTIC PRODUCT MATCHING
+# SEMANTIC MATCHING
 # ==========================================
 
 def semantic_match_product(
@@ -226,13 +209,15 @@ def semantic_match_product(
 
     try:
 
-        canonical_products = supabase.table(
+        products_response = supabase.table(
             "canonical_products"
         ).select(
             "*"
         ).execute()
 
-        products = canonical_products.data
+        products = (
+            products_response.data
+        )
 
         if not products:
             return None
@@ -247,13 +232,12 @@ def semantic_match_product(
                     "role": "system",
 
                     "content": """
-                    You are an expert restaurant inventory AI.
-
-                    Match:
-                    - vendor shorthand
-                    - invoice abbreviations
-                    - OCR mistakes
-                    - alternate naming
+                    Match vendor shorthand,
+                    OCR mistakes,
+                    abbreviations,
+                    alternate names,
+                    and invoice names
+                    to canonical inventory products.
 
                     Return ONLY JSON.
                     """
@@ -317,33 +301,22 @@ def semantic_match_product(
                     "canonical_product_id"
                 )
 
-                matched_product = next(
+                for product in products:
 
-                    (
-                        p for p in products
+                    if product["id"] == matched_id:
 
-                        if p["id"] == matched_id
-                    ),
-
-                    None
-                )
-
-                return matched_product
+                        return product
 
         return None
 
     except Exception as e:
-
-        print(
-            "SEMANTIC MATCH ERROR"
-        )
 
         print(e)
 
         return None
 
 # ==========================================
-# CREATE NEW PRODUCT
+# CREATE PRODUCT
 # ==========================================
 
 def create_new_product(
@@ -352,18 +325,20 @@ def create_new_product(
     unit
 ):
 
-    ai_data = get_ai_product_metadata(
+    metadata = get_ai_product_metadata(
         product_name,
         unit
     )
 
-    category = ai_data[
-        "category"
-    ]
+    category = metadata.get(
+        "category",
+        "Other"
+    )
 
-    base_unit = ai_data[
-        "base_unit"
-    ]
+    base_unit = metadata.get(
+        "base_unit",
+        unit
+    )
 
     canonical_response = supabase.table(
         "canonical_products"
@@ -384,12 +359,12 @@ def create_new_product(
         canonical_response.data[0]
     )
 
-    canonical_id = canonical_product[
-        "id"
-    ]
+    canonical_id = (
+        canonical_product["id"]
+    )
 
     # ======================================
-    # CREATE PRODUCT ALIAS
+    # CREATE ALIAS
     # ======================================
 
     supabase.table(
@@ -405,7 +380,7 @@ def create_new_product(
     }).execute()
 
     # ======================================
-    # INSERT INTO LIVE INVENTORY
+    # CREATE LIVE INVENTORY
     # ======================================
 
     supabase.table(
@@ -432,7 +407,122 @@ def create_new_product(
     return canonical_product
 
 # ==========================================
-# INVENTORY IMAGE SCAN
+# PROCESS DETECTED ITEMS
+# ==========================================
+
+def process_inventory_items(
+    items
+):
+
+    processed_items = []
+
+    for item in items:
+
+        product_name = item.get(
+            "product_name",
+            ""
+        )
+
+        quantity = item.get(
+            "estimated_quantity",
+            1
+        )
+
+        unit = item.get(
+            "suggested_base_unit",
+            "each"
+        )
+
+        canonical_product = (
+            semantic_match_product(
+                product_name
+            )
+        )
+
+        # ==================================
+        # EXISTING PRODUCT
+        # ==================================
+
+        if canonical_product:
+
+            canonical_id = (
+                canonical_product["id"]
+            )
+
+        # ==================================
+        # CREATE NEW PRODUCT
+        # ==================================
+
+        else:
+
+            created_product = (
+                create_new_product(
+                    product_name,
+                    quantity,
+                    unit
+                )
+            )
+
+            canonical_id = (
+                created_product["id"]
+            )
+
+        # ==================================
+        # UPDATE LIVE INVENTORY
+        # ==================================
+
+        inventory_response = supabase.table(
+            "live_inventory"
+        ).select(
+            "*"
+        ).eq(
+            "canonical_product_id",
+            canonical_id
+        ).execute()
+
+        if inventory_response.data:
+
+            current_quantity = (
+                inventory_response.data[0][
+                    "current_quantity"
+                ]
+            )
+
+            updated_quantity = (
+                current_quantity
+                + quantity
+            )
+
+            supabase.table(
+                "live_inventory"
+            ).update({
+
+                "current_quantity":
+                updated_quantity
+
+            }).eq(
+
+                "canonical_product_id",
+                canonical_id
+
+            ).execute()
+
+        processed_items.append({
+
+            "product_name":
+            product_name,
+
+            "quantity":
+            quantity,
+
+            "canonical_product_id":
+            canonical_id
+        })
+
+    return processed_items
+
+# ==========================================
+# IMAGE INVENTORY SCAN
 # ==========================================
 
 @app.post("/scan")
@@ -507,21 +597,180 @@ async def scan_inventory(
             cleaned
         )
 
+        processed = process_inventory_items(
+            items
+        )
+
         return {
 
             "success": True,
 
-            "result":
-            items
+            "items":
+            processed
+        }
+
+    except Exception as e:
+
+        print(e)
+
+        return {
+
+            "success": False,
+
+            "error": str(e)
+        }
+
+# ==========================================
+# VIDEO INVENTORY SCAN
+# ==========================================
+
+@app.post("/scan_inventory_video")
+async def scan_inventory_video(
+    file: UploadFile
+):
+
+    try:
+
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".mp4"
+        ) as temp_video:
+
+            video_bytes = await file.read()
+
+            temp_video.write(
+                video_bytes
+            )
+
+            temp_video_path = (
+                temp_video.name
+            )
+
+        cap = cv2.VideoCapture(
+            temp_video_path
+        )
+
+        frame_results = []
+
+        frame_count = 0
+
+        while cap.isOpened():
+
+            success, frame = cap.read()
+
+            if not success:
+                break
+
+            # ==================================
+            # SAMPLE EVERY 30 FRAMES
+            # ==================================
+
+            if frame_count % 30 == 0:
+
+                _, buffer = cv2.imencode(
+                    ".jpg",
+                    frame
+                )
+
+                base64_frame = (
+                    base64.b64encode(
+                        buffer
+                    ).decode("utf-8")
+                )
+
+                response = client.chat.completions.create(
+
+                    model="gpt-4.1-mini",
+
+                    messages=[
+
+                        {
+                            "role": "user",
+
+                            "content": [
+
+                                {
+                                    "type": "text",
+
+                                    "text": """
+                                    Identify inventory items.
+
+                                    Return ONLY JSON.
+
+                                    [
+                                      {
+                                        "product_name": "",
+                                        "estimated_quantity": 0
+                                      }
+                                    ]
+                                    """
+                                },
+
+                                {
+                                    "type": "image_url",
+
+                                    "image_url": {
+                                        "url":
+                                        f"data:image/jpeg;base64,{base64_frame}"
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                )
+
+                raw = (
+                    response
+                    .choices[0]
+                    .message
+                    .content
+                )
+
+                cleaned = clean_json(
+                    raw
+                )
+
+                try:
+
+                    items = json.loads(
+                        cleaned
+                    )
+
+                    frame_results.extend(
+                        items
+                    )
+
+                except Exception as e:
+
+                    print(
+                        "FRAME JSON ERROR"
+                    )
+
+                    print(e)
+
+            frame_count += 1
+
+        cap.release()
+
+        processed = process_inventory_items(
+            frame_results
+        )
+
+        return {
+
+            "success": True,
+
+            "items":
+            processed
         }
 
     except Exception as e:
 
         print(
-            "SCAN ERROR"
+            "VIDEO SCAN ERROR"
         )
 
-        print(str(e))
+        print(e)
 
         return {
 
@@ -626,31 +875,17 @@ async def scan_invoice(
                 0
             )
 
-            # ==================================
-            # SEMANTIC MATCH
-            # ==================================
-
             canonical_product = (
                 semantic_match_product(
                     product_name
                 )
             )
 
-            canonical_product_id = None
-
-            # ==================================
-            # EXISTING PRODUCT
-            # ==================================
-
             if canonical_product:
 
-                canonical_product_id = (
+                canonical_id = (
                     canonical_product["id"]
                 )
-
-            # ==================================
-            # CREATE NEW PRODUCT
-            # ==================================
 
             else:
 
@@ -662,76 +897,9 @@ async def scan_invoice(
                     )
                 )
 
-                canonical_product_id = (
+                canonical_id = (
                     created_product["id"]
                 )
-
-            # ==================================
-            # UPDATE LIVE INVENTORY
-            # ==================================
-
-            inventory_response = supabase.table(
-                "live_inventory"
-            ).select(
-                "*"
-            ).eq(
-                "canonical_product_id",
-                canonical_product_id
-            ).execute()
-
-            if inventory_response.data:
-
-                current_quantity = (
-                    inventory_response.data[0][
-                        "current_quantity"
-                    ]
-                )
-
-                updated_quantity = (
-                    current_quantity
-                    + quantity
-                )
-
-                supabase.table(
-                    "live_inventory"
-                ).update({
-
-                    "current_quantity":
-                    updated_quantity
-
-                }).eq(
-
-                    "canonical_product_id",
-                    canonical_product_id
-
-                ).execute()
-
-            else:
-
-                supabase.table(
-                    "live_inventory"
-                ).insert({
-
-                    "canonical_product_id":
-                    canonical_product_id,
-
-                    "current_quantity":
-                    quantity,
-
-                    "unit":
-                    unit,
-
-                    "par_level":
-                    0,
-
-                    "reorder_threshold":
-                    0
-
-                }).execute()
-
-            # ==================================
-            # STORE PROCESSED ITEM
-            # ==================================
 
             processed_items.append({
 
@@ -748,7 +916,7 @@ async def scan_invoice(
                 price,
 
                 "canonical_product_id":
-                canonical_product_id
+                canonical_id
             })
 
         return {
@@ -762,10 +930,10 @@ async def scan_invoice(
     except Exception as e:
 
         print(
-            "INVOICE ERROR:"
+            "INVOICE ERROR"
         )
 
-        print(str(e))
+        print(e)
 
         return {
 
