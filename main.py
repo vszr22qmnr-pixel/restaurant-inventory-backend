@@ -121,7 +121,6 @@ BASE_UNIT_OPTIONS = [
 # ==========================================
 
 def clean_json(content):
-
     content = content.replace(
         "```json",
         ""
@@ -134,6 +133,166 @@ def clean_json(content):
 
     return content.strip()
 
+    # ==========================================
+# AI SEMANTIC PRODUCT MATCHING
+# ==========================================
+
+def semantic_match_product(
+    scanned_name
+):
+
+    try:
+
+        canonical_products = supabase.table(
+            "canonical_products"
+        ).select(
+            "id, canonical_name, category, base_unit"
+        ).execute()
+
+        products = canonical_products.data
+
+        if not products:
+            return None
+
+        product_list = []
+
+        for product in products:
+
+            product_list.append({
+
+                "id":
+                product["id"],
+
+                "canonical_name":
+                product["canonical_name"],
+
+                "category":
+                product.get(
+                    "category",
+                    "Other"
+                ),
+
+                "base_unit":
+                product.get(
+                    "base_unit",
+                    "each"
+                )
+            })
+
+        response = client.chat.completions.create(
+
+            model="gpt-4.1-mini",
+
+            messages=[
+
+                {
+                    "role": "system",
+
+                    "content": """
+                    You are an expert restaurant inventory AI.
+
+                    Your job is to determine if a scanned product
+                    semantically matches an existing canonical product.
+
+                    Consider:
+                    - abbreviations
+                    - OCR mistakes
+                    - vendor shorthand
+                    - pack sizes
+                    - naming variations
+                    - plural/singular
+                    - brand variations
+
+                    Return ONLY valid JSON.
+                    """
+                },
+
+                {
+                    "role": "user",
+
+                    "content": f"""
+                    Scanned Product:
+
+                    {scanned_name}
+
+                    Existing Canonical Products:
+
+                    {json.dumps(product_list)}
+
+                    Return format:
+
+                    {{
+                      "matched": true,
+                      "canonical_product_id": "",
+                      "confidence": 0.0
+                    }}
+
+                    OR
+
+                    {{
+                      "matched": false
+                    }}
+
+                    ONLY match if confidence is high.
+                    """
+                }
+            ]
+        )
+
+        content = response.choices[
+            0
+        ].message.content
+
+        cleaned = clean_json(
+            content
+        )
+
+        result = json.loads(
+            cleaned
+        )
+
+        if result.get(
+            "matched"
+        ) == True:
+
+            matched_id = result.get(
+                "canonical_product_id"
+            )
+
+            confidence = result.get(
+                "confidence",
+                0.0
+            )
+
+            if confidence >= 0.80:
+
+                matched_product = next(
+
+                    (
+                        p for p in products
+
+                        if p["id"] ==
+                        matched_id
+                    ),
+
+                    None
+                )
+
+                return matched_product
+
+        return None
+
+    except Exception as e:
+
+        print(
+            "SEMANTIC MATCH ERROR"
+        )
+
+        print(e)
+
+        return None
+
+    
 # ==========================================
 # INVENTORY SCAN
 # ==========================================
