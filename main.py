@@ -71,13 +71,16 @@ BASE_UNIT_OPTIONS = [
 # HEALTH CHECK
 # ==========================================
 
+
 @app.get("/")
 async def root():
     return {"status": "Restaurant Inventory AI Backend Running"}
 
+
 # ==========================================
 # JSON CLEANER
 # ==========================================
+
 
 def clean_json(content):
     if not content:
@@ -87,9 +90,11 @@ def clean_json(content):
     content = content.replace("```", "")
     return content.strip()
 
+
 # ==========================================
 # AI CATEGORY + UNIT
 # ==========================================
+
 
 def get_ai_product_metadata(product_name, fallback_unit="each"):
     try:
@@ -106,7 +111,7 @@ def get_ai_product_metadata(product_name, fallback_unit="each"):
                     - best base unit
 
                     Return ONLY JSON.
-                    """
+                    """,
                 },
                 {
                     "role": "user",
@@ -126,9 +131,9 @@ def get_ai_product_metadata(product_name, fallback_unit="each"):
                       "category": "",
                       "base_unit": ""
                     }}
-                    """
-                }
-            ]
+                    """,
+                },
+            ],
         )
 
         raw = response.choices[0].message.content
@@ -139,9 +144,11 @@ def get_ai_product_metadata(product_name, fallback_unit="each"):
         print(e)
         return {"category": "Other", "base_unit": fallback_unit}
 
+
 # ==========================================
 # SEMANTIC MATCHING
 # ==========================================
+
 
 def semantic_match_product(scanned_name):
     try:
@@ -165,7 +172,7 @@ def semantic_match_product(scanned_name):
                     to canonical inventory products.
 
                     Return ONLY JSON.
-                    """
+                    """,
                 },
                 {
                     "role": "user",
@@ -189,9 +196,9 @@ def semantic_match_product(scanned_name):
                     {{
                       "matched": false
                     }}
-                    """
-                }
-            ]
+                    """,
+                },
+            ],
         )
 
         raw = response.choices[0].message.content
@@ -212,67 +219,93 @@ def semantic_match_product(scanned_name):
         print(e)
         return None
 
+
 # ==========================================
 # CREATE PRODUCT
 # ==========================================
+
 
 def create_new_product(product_name, quantity, unit):
     metadata = get_ai_product_metadata(product_name, unit)
     category = metadata.get("category", "Other")
     base_unit = metadata.get("base_unit", unit)
 
-    canonical_response = supabase.table("canonical_products").insert({
-        "canonical_name": product_name,
-        "category": category,
-        "base_unit": base_unit,
-    }).execute()
+    canonical_response = (
+        supabase.table("canonical_products")
+        .insert(
+            {
+                "canonical_name": product_name,
+                "category": category,
+                "base_unit": base_unit,
+            }
+        )
+        .execute()
+    )
 
     canonical_product = canonical_response.data[0]
     canonical_id = canonical_product["id"]
 
-    supabase.table("product_aliases").insert({
-        "raw_product_name": product_name,
-        "canonical_product_id": canonical_id,
-    }).execute()
+    supabase.table("product_aliases").insert(
+        {
+            "raw_product_name": product_name,
+            "canonical_product_id": canonical_id,
+        }
+    ).execute()
 
-    supabase.table("live_inventory").insert({
-        "canonical_product_id": canonical_id,
-        "current_quantity": quantity,
-        "unit": base_unit,
-        "par_level": 0,
-        "reorder_threshold": 0,
-    }).execute()
+    supabase.table("live_inventory").insert(
+        {
+            "canonical_product_id": canonical_id,
+            "current_quantity": quantity,
+            "unit": base_unit,
+            "par_level": 0,
+            "reorder_threshold": 0,
+        }
+    ).execute()
 
     return canonical_product
+
 
 # ==========================================
 # SAVE PURCHASE HISTORY
 # ==========================================
 
-def save_purchase_history(canonical_product_id, vendor_name, invoice_date, item_name, quantity, unit, unit_cost):
+
+def save_purchase_history(
+    canonical_product_id,
+    vendor_name,
+    invoice_date,
+    item_name,
+    quantity,
+    unit,
+    unit_cost,
+):
     try:
         quantity = float(quantity)
         unit_cost = float(unit_cost)
         total_cost = quantity * unit_cost
 
-        supabase.table("purchases").insert({
-            "canonical_product_id": canonical_product_id,
-            "vendor_name": vendor_name,
-            "invoice_date": invoice_date,
-            "item_name": item_name,
-            "quantity": quantity,
-            "unit": unit,
-            "unit_cost": unit_cost,
-            "total_cost": total_cost,
-        }).execute()
+        supabase.table("purchases").insert(
+            {
+                "canonical_product_id": canonical_product_id,
+                "vendor_name": vendor_name,
+                "invoice_date": invoice_date,
+                "item_name": item_name,
+                "quantity": quantity,
+                "unit": unit,
+                "unit_cost": unit_cost,
+                "total_cost": total_cost,
+            }
+        ).execute()
 
     except Exception as e:
         print("PURCHASE SAVE ERROR")
         print(e)
 
+
 # ==========================================
 # PROCESS DETECTED ITEMS
 # ==========================================
+
 
 def process_inventory_items(items):
     processed_items = []
@@ -289,25 +322,37 @@ def process_inventory_items(items):
             created_product = create_new_product(product_name, quantity, unit)
             canonical_id = created_product["id"]
 
-        inventory_response = supabase.table("live_inventory").select("*").eq("canonical_product_id", canonical_id).execute()
+        inventory_response = (
+            supabase.table("live_inventory")
+            .select("*")
+            .eq("canonical_product_id", canonical_id)
+            .execute()
+        )
         if inventory_response.data:
             current_quantity = inventory_response.data[0]["current_quantity"]
             updated_quantity = current_quantity + quantity
-            supabase.table("live_inventory").update({
-                "current_quantity": updated_quantity,
-            }).eq("canonical_product_id", canonical_id).execute()
+            supabase.table("live_inventory").update(
+                {
+                    "current_quantity": updated_quantity,
+                    "estimated_unit_cost": price,
+                }
+            ).eq("canonical_product_id", canonical_id).execute()
 
-        processed_items.append({
-            "product_name": product_name,
-            "quantity": quantity,
-            "canonical_product_id": canonical_id,
-        })
+        processed_items.append(
+            {
+                "product_name": product_name,
+                "quantity": quantity,
+                "canonical_product_id": canonical_id,
+            }
+        )
 
     return processed_items
+
 
 # ==========================================
 # IMAGE INVENTORY SCAN
 # ==========================================
+
 
 @app.post("/scan")
 async def scan_inventory(file: UploadFile):
@@ -337,15 +382,17 @@ async def scan_inventory(file: UploadFile):
                                 "suggested_base_unit": ""
                               }
                             ]
-                            """
+                            """,
                         },
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                        }
-                    ]
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            },
+                        },
+                    ],
                 }
-            ]
+            ],
         )
 
         raw = response.choices[0].message.content
@@ -359,9 +406,11 @@ async def scan_inventory(file: UploadFile):
         print(e)
         return {"success": False, "error": str(e)}
 
+
 # ==========================================
 # VIDEO INVENTORY SCAN
 # ==========================================
+
 
 @app.post("/scan_inventory_video")
 async def scan_inventory_video(file: UploadFile):
@@ -403,15 +452,17 @@ async def scan_inventory_video(file: UploadFile):
                                         "estimated_quantity": 0
                                       }
                                     ]
-                                    """
+                                    """,
                                 },
                                 {
                                     "type": "image_url",
-                                    "image_url": {"url": f"data:image/jpeg;base64,{base64_frame}"},
-                                }
-                            ]
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{base64_frame}"
+                                    },
+                                },
+                            ],
                         }
-                    ]
+                    ],
                 )
 
                 raw = response.choices[0].message.content
@@ -436,9 +487,11 @@ async def scan_inventory_video(file: UploadFile):
         print(e)
         return {"success": False, "error": str(e)}
 
+
 # ==========================================
 # INVOICE SCANNER
 # ==========================================
+
 
 @app.post("/scan_invoice")
 async def scan_invoice(file: UploadFile):
@@ -473,15 +526,17 @@ async def scan_invoice(file: UploadFile):
                                 "price": 0
                               }
                             ]
-                            """
+                            """,
                         },
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                        }
-                    ]
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            },
+                        },
+                    ],
                 }
-            ]
+            ],
         )
 
         raw = response.choices[0].message.content
@@ -512,18 +567,23 @@ async def scan_invoice(file: UploadFile):
                 price,
             )
 
-            processed_items.append({
-                "product_name": product_name,
-                "quantity": quantity,
-                "unit": unit,
-                "price": price,
-                "canonical_product_id": canonical_id,
-            })
+            processed_items.append(
+                {
+                    "product_name": product_name,
+                    "quantity": quantity,
+                    "unit": unit,
+                    "price": price,
+                    "canonical_product_id": canonical_id,
+                }
+            )
 
-        return {"success": True, "vendor_name": "Unknown Vendor", "items": processed_items}
+        return {
+            "success": True,
+            "vendor_name": "Unknown Vendor",
+            "items": processed_items,
+        }
 
     except Exception as e:
         print("INVOICE ERROR")
         print(e)
         return {"success": False, "error": str(e)}
-
