@@ -9,414 +9,956 @@ import tempfile
 import cv2
 
 # ==========================================
+
 # ENV VARIABLES
+
 # ==========================================
 
 SUPABASE_URL = os.getenv(
-    "SUPABASE_URL"
+"SUPABASE_URL"
 )
 
 SUPABASE_KEY = os.getenv(
-    "SUPABASE_SERVICE_ROLE_KEY"
+"SUPABASE_SERVICE_ROLE_KEY"
 )
 
 OPENAI_API_KEY = os.getenv(
-    "OPENAI_API_KEY"
+"OPENAI_API_KEY"
 )
 
 # ==========================================
+
 # CLIENTS
+
 # ==========================================
 
 supabase = create_client(
-    SUPABASE_URL,
-    SUPABASE_KEY,
+SUPABASE_URL,
+SUPABASE_KEY,
 )
 
 client = OpenAI(
-    api_key=OPENAI_API_KEY
+api_key=OPENAI_API_KEY
 )
 
 # ==========================================
+
 # FASTAPI
+
 # ==========================================
 
 app = FastAPI()
 
 # ==========================================
+
 # CATEGORY OPTIONS
+
 # ==========================================
 
 CATEGORY_OPTIONS = [
 
-    "Produce",
-    "Dairy",
-    "Meat",
-    "Seafood",
-    "Frozen",
-    "Dry Storage",
-    "Bakery",
-    "Beverages",
-    "Beer",
-    "Wine",
-    "Liquor",
-    "Non-Alcoholic Drinks",
-    "Paper Goods",
-    "Cleaning",
-    "Other",
+```
+"Produce",
+"Dairy",
+"Meat",
+"Seafood",
+"Frozen",
+"Dry Storage",
+"Bakery",
+"Beverages",
+"Beer",
+"Wine",
+"Liquor",
+"Non-Alcoholic Drinks",
+"Paper Goods",
+"Cleaning",
+"Other",
+```
+
 ]
 
 # ==========================================
+
 # BASE UNIT OPTIONS
+
 # ==========================================
 
 BASE_UNIT_OPTIONS = [
 
-    "lbs",
-    "each",
-    "case",
-    "oz",
-    "gallon",
-    "bag",
-    "box",
-    "bottle",
-    "can",
+```
+"lbs",
+"each",
+"case",
+"oz",
+"gallon",
+"bag",
+"box",
+"bottle",
+"can",
+```
+
 ]
 
 # ==========================================
+
 # HEALTH CHECK
+
 # ==========================================
 
 @app.get("/")
 async def root():
 
-    return {
-        "status":
-        "Restaurant Inventory AI Backend Running"
-    }
+```
+return {
+    "status":
+    "Restaurant Inventory AI Backend Running"
+}
+```
 
 # ==========================================
+
 # JSON CLEANER
+
 # ==========================================
 
 def clean_json(content):
 
-    if not content:
-        return ""
+````
+if not content:
+    return ""
 
-    content = content.replace(
-        "```json",
-        ""
-    )
+content = content.replace(
+    "```json",
+    ""
+)
 
-    content = content.replace(
-        "```",
-        ""
-    )
+content = content.replace(
+    "```",
+    ""
+)
 
-    return content.strip()
+return content.strip()
+````
 
 # ==========================================
+
 # AI CATEGORY + UNIT
+
 # ==========================================
 
 def get_ai_product_metadata(
-    product_name,
-    fallback_unit="each"
+product_name,
+fallback_unit="each"
 ):
 
-    try:
+```
+try:
 
-        response = client.chat.completions.create(
+    response = client.chat.completions.create(
 
-            model="gpt-4.1-mini",
+        model="gpt-4.1-mini",
 
-            messages=[
+        messages=[
 
-                {
-                    "role": "system",
+            {
+                "role": "system",
 
-                    "content": """
-                    You are a restaurant inventory AI.
+                "content": """
+                You are a restaurant inventory AI.
 
-                    Determine:
-                    - best category
-                    - best base unit
+                Determine:
+                - best category
+                - best base unit
 
-                    Return ONLY JSON.
-                    """
-                },
+                Return ONLY JSON.
+                """
+            },
 
-                {
-                    "role": "user",
+            {
+                "role": "user",
 
-                    "content": f"""
-                    Product:
-                    {product_name}
+                "content": f"""
+                Product:
+                {product_name}
 
-                    Categories:
-                    {CATEGORY_OPTIONS}
+                Categories:
+                {CATEGORY_OPTIONS}
 
-                    Base Units:
-                    {BASE_UNIT_OPTIONS}
+                Base Units:
+                {BASE_UNIT_OPTIONS}
 
-                    Return:
+                Return:
 
-                    {{
-                      "category": "",
-                      "base_unit": ""
-                    }}
-                    """
-                }
-            ]
-        )
+                {{
+                  "category": "",
+                  "base_unit": ""
+                }}
+                """
+            }
+        ]
+    )
 
-        raw = (
-            response
-            .choices[0]
-            .message
-            .content
-        )
+    raw = (
+        response
+        .choices[0]
+        .message
+        .content
+    )
 
-        cleaned = clean_json(
-            raw
-        )
+    cleaned = clean_json(
+        raw
+    )
 
-        return json.loads(
-            cleaned
-        )
+    return json.loads(
+        cleaned
+    )
 
-    except Exception as e:
+except Exception as e:
 
-        print(e)
+    print(e)
 
-        return {
+    return {
 
-            "category":
-            "Other",
+        "category":
+        "Other",
 
-            "base_unit":
-            fallback_unit
-        }
+        "base_unit":
+        fallback_unit
+    }
+```
 
 # ==========================================
+
 # SEMANTIC MATCHING
+
 # ==========================================
 
 def semantic_match_product(
-    scanned_name
+scanned_name
 ):
 
-    try:
+```
+try:
 
-        products_response = supabase.table(
-            "canonical_products"
-        ).select(
-            "*"
-        ).execute()
+    products_response = supabase.table(
+        "canonical_products"
+    ).select(
+        "*"
+    ).execute()
 
-        products = (
-            products_response.data
+    products = (
+        products_response.data
+    )
+
+    if not products:
+        return None
+
+    response = client.chat.completions.create(
+
+        model="gpt-4.1-mini",
+
+        messages=[
+
+            {
+                "role": "system",
+
+                "content": """
+                Match vendor shorthand,
+                OCR mistakes,
+                abbreviations,
+                alternate names,
+                and invoice names
+                to canonical inventory products.
+
+                Return ONLY JSON.
+                """
+            },
+
+            {
+                "role": "user",
+
+                "content": f"""
+                Product:
+                {scanned_name}
+
+                Existing Products:
+                {json.dumps(products)}
+
+                Return:
+
+                {{
+                  "matched": true,
+                  "canonical_product_id": "",
+                  "confidence": 0.0
+                }}
+
+                OR
+
+                {{
+                  "matched": false
+                }}
+                """
+            }
+        ]
+    )
+
+    raw = (
+        response
+        .choices[0]
+        .message
+        .content
+    )
+
+    cleaned = clean_json(
+        raw
+    )
+
+    result = json.loads(
+        cleaned
+    )
+
+    if result.get(
+        "matched"
+    ):
+
+        confidence = result.get(
+            "confidence",
+            0
         )
 
-        if not products:
-            return None
+        if confidence >= 0.80:
 
-        response = client.chat.completions.create(
-
-            model="gpt-4.1-mini",
-
-            messages=[
-
-                {
-                    "role": "system",
-
-                    "content": """
-                    Match vendor shorthand,
-                    OCR mistakes,
-                    abbreviations,
-                    alternate names,
-                    and invoice names
-                    to canonical inventory products.
-
-                    Return ONLY JSON.
-                    """
-                },
-
-                {
-                    "role": "user",
-
-                    "content": f"""
-                    Product:
-                    {scanned_name}
-
-                    Existing Products:
-                    {json.dumps(products)}
-
-                    Return:
-
-                    {{
-                      "matched": true,
-                      "canonical_product_id": "",
-                      "confidence": 0.0
-                    }}
-
-                    OR
-
-                    {{
-                      "matched": false
-                    }}
-                    """
-                }
-            ]
-        )
-
-        raw = (
-            response
-            .choices[0]
-            .message
-            .content
-        )
-
-        cleaned = clean_json(
-            raw
-        )
-
-        result = json.loads(
-            cleaned
-        )
-
-        if result.get(
-            "matched"
-        ):
-
-            confidence = result.get(
-                "confidence",
-                0
+            matched_id = result.get(
+                "canonical_product_id"
             )
 
-            if confidence >= 0.80:
+            for product in products:
 
-                matched_id = result.get(
-                    "canonical_product_id"
-                )
+                if product["id"] == matched_id:
 
-                for product in products:
+                    return product
 
-                    if product["id"] == matched_id:
+    return None
 
-                        return product
+except Exception as e:
 
-        return None
+    print(e)
 
-    except Exception as e:
-
-        print(e)
-
-        return None
+    return None
+```
 
 # ==========================================
+
 # CREATE PRODUCT
+
 # ==========================================
 
 def create_new_product(
-    product_name,
-    quantity,
-    unit
+product_name,
+quantity,
+unit
 ):
 
-    metadata = get_ai_product_metadata(
-        product_name,
-        unit
+```
+metadata = get_ai_product_metadata(
+    product_name,
+    unit
+)
+
+category = metadata.get(
+    "category",
+    "Other"
+)
+
+base_unit = metadata.get(
+    "base_unit",
+    unit
+)
+
+canonical_response = supabase.table(
+    "canonical_products"
+).insert({
+
+    "canonical_name":
+    product_name,
+
+    "category":
+    category,
+
+    "base_unit":
+    base_unit
+
+}).execute()
+
+canonical_product = (
+    canonical_response.data[0]
+)
+
+canonical_id = (
+    canonical_product["id"]
+)
+
+supabase.table(
+    "product_aliases"
+).insert({
+
+    "raw_product_name":
+    product_name,
+
+    "canonical_product_id":
+    canonical_id
+
+}).execute()
+
+supabase.table(
+    "live_inventory"
+).insert({
+
+    "canonical_product_id":
+    canonical_id,
+
+    "current_quantity":
+    quantity,
+
+    "unit":
+    base_unit,
+
+    "par_level":
+    0,
+
+    "reorder_threshold":
+    0
+
+}).execute()
+
+return canonical_product
+```
+
+# ==========================================
+
+# SAVE PURCHASE HISTORY
+
+# ==========================================
+
+def save_purchase_history(
+
+```
+canonical_product_id,
+vendor_name,
+invoice_date,
+item_name,
+quantity,
+unit,
+unit_cost
+```
+
+):
+
+```
+try:
+
+    quantity = float(quantity)
+    unit_cost = float(unit_cost)
+
+    total_cost = (
+        quantity * unit_cost
     )
-
-    category = metadata.get(
-        "category",
-        "Other"
-    )
-
-    base_unit = metadata.get(
-        "base_unit",
-        unit
-    )
-
-    canonical_response = supabase.table(
-        "canonical_products"
-    ).insert({
-
-        "canonical_name":
-        product_name,
-
-        "category":
-        category,
-
-        "base_unit":
-        base_unit
-
-    }).execute()
-
-    canonical_product = (
-        canonical_response.data[0]
-    )
-
-    canonical_id = (
-        canonical_product["id"]
-    )
-
-    # ======================================
-    # CREATE ALIAS
-    # ======================================
 
     supabase.table(
-        "product_aliases"
-    ).insert({
-
-        "raw_product_name":
-        product_name,
-
-        "canonical_product_id":
-        canonical_id
-
-    }).execute()
-
-    # ======================================
-    # CREATE LIVE INVENTORY
-    # ======================================
-
-    supabase.table(
-        "live_inventory"
+        "purchases"
     ).insert({
 
         "canonical_product_id":
-        canonical_id,
+        canonical_product_id,
 
-        "current_quantity":
+        "vendor_name":
+        vendor_name,
+
+        "invoice_date":
+        invoice_date,
+
+        "item_name":
+        item_name,
+
+        "quantity":
         quantity,
 
         "unit":
-        base_unit,
+        unit,
 
-        "par_level":
-        0,
+        "unit_cost":
+        unit_cost,
 
-        "reorder_threshold":
-        0
+        "total_cost":
+        total_cost
 
     }).execute()
 
-    return canonical_product
+except Exception as e:
+
+    print(
+        "PURCHASE SAVE ERROR"
+    )
+
+    print(e)
+```
 
 # ==========================================
+
 # PROCESS DETECTED ITEMS
+
 # ==========================================
 
 def process_inventory_items(
-    items
+items
 ):
+
+```
+processed_items = []
+
+for item in items:
+
+    product_name = item.get(
+        "product_name",
+        ""
+    )
+
+    quantity = item.get(
+        "estimated_quantity",
+        1
+    )
+
+    unit = item.get(
+        "suggested_base_unit",
+        "each"
+    )
+
+    canonical_product = (
+        semantic_match_product(
+            product_name
+        )
+    )
+
+    if canonical_product:
+
+        canonical_id = (
+            canonical_product["id"]
+        )
+
+    else:
+
+        created_product = (
+            create_new_product(
+                product_name,
+                quantity,
+                unit
+            )
+        )
+
+        canonical_id = (
+            created_product["id"]
+        )
+
+    inventory_response = supabase.table(
+        "live_inventory"
+    ).select(
+        "*"
+    ).eq(
+        "canonical_product_id",
+        canonical_id
+    ).execute()
+
+    if inventory_response.data:
+
+        current_quantity = (
+            inventory_response.data[0][
+                "current_quantity"
+            ]
+        )
+
+        updated_quantity = (
+            current_quantity
+            + quantity
+        )
+
+        supabase.table(
+            "live_inventory"
+        ).update({
+
+            "current_quantity":
+            updated_quantity
+
+        }).eq(
+
+            "canonical_product_id",
+            canonical_id
+
+        ).execute()
+
+    processed_items.append({
+
+        "product_name":
+        product_name,
+
+        "quantity":
+        quantity,
+
+        "canonical_product_id":
+        canonical_id
+    })
+
+return processed_items
+```
+
+# ==========================================
+
+# IMAGE INVENTORY SCAN
+
+# ==========================================
+
+@app.post("/scan")
+async def scan_inventory(
+file: UploadFile
+):
+
+```
+try:
+
+    image_bytes = await file.read()
+
+    base64_image = base64.b64encode(
+        image_bytes
+    ).decode("utf-8")
+
+    response = client.chat.completions.create(
+
+        model="gpt-4.1-mini",
+
+        messages=[
+
+            {
+                "role": "user",
+
+                "content": [
+
+                    {
+                        "type": "text",
+
+                        "text": """
+                        Identify all inventory items.
+
+                        Return ONLY JSON.
+
+                        [
+                          {
+                            "product_name": "",
+                            "estimated_quantity": 0,
+                            "confidence": 0.0,
+                            "suggested_category": "",
+                            "suggested_base_unit": ""
+                          }
+                        ]
+                        """
+                    },
+
+                    {
+                        "type": "image_url",
+
+                        "image_url": {
+                            "url":
+                            f"data:image/jpeg;base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ]
+    )
+
+    raw = (
+        response
+        .choices[0]
+        .message
+        .content
+    )
+
+    cleaned = clean_json(
+        raw
+    )
+
+    items = json.loads(
+        cleaned
+    )
+
+    processed = process_inventory_items(
+        items
+    )
+
+    return {
+
+        "success": True,
+
+        "items":
+        processed
+    }
+
+except Exception as e:
+
+    print(e)
+
+    return {
+
+        "success": False,
+
+        "error": str(e)
+    }
+```
+
+# ==========================================
+
+# VIDEO INVENTORY SCAN
+
+# ==========================================
+
+@app.post("/scan_inventory_video")
+async def scan_inventory_video(
+file: UploadFile
+):
+
+```
+try:
+
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=".mp4"
+    ) as temp_video:
+
+        video_bytes = await file.read()
+
+        temp_video.write(
+            video_bytes
+        )
+
+        temp_video_path = (
+            temp_video.name
+        )
+
+    cap = cv2.VideoCapture(
+        temp_video_path
+    )
+
+    frame_results = []
+
+    frame_count = 0
+
+    while cap.isOpened():
+
+        success, frame = cap.read()
+
+        if not success:
+            break
+
+        if frame_count % 30 == 0:
+
+            _, buffer = cv2.imencode(
+                ".jpg",
+                frame
+            )
+
+            base64_frame = (
+                base64.b64encode(
+                    buffer
+                ).decode("utf-8")
+            )
+
+            response = client.chat.completions.create(
+
+                model="gpt-4.1-mini",
+
+                messages=[
+
+                    {
+                        "role": "user",
+
+                        "content": [
+
+                            {
+                                "type": "text",
+
+                                "text": """
+                                Identify inventory items.
+
+                                Return ONLY JSON.
+
+                                [
+                                  {
+                                    "product_name": "",
+                                    "estimated_quantity": 0
+                                  }
+                                ]
+                                """
+                            },
+
+                            {
+                                "type": "image_url",
+
+                                "image_url": {
+                                    "url":
+                                    f"data:image/jpeg;base64,{base64_frame}"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            )
+
+            raw = (
+                response
+                .choices[0]
+                .message
+                .content
+            )
+
+            cleaned = clean_json(
+                raw
+            )
+
+            try:
+
+                items = json.loads(
+                    cleaned
+                )
+
+                frame_results.extend(
+                    items
+                )
+
+            except Exception as e:
+
+                print(
+                    "FRAME JSON ERROR"
+                )
+
+                print(e)
+
+        frame_count += 1
+
+    cap.release()
+
+    processed = process_inventory_items(
+        frame_results
+    )
+
+    return {
+
+        "success": True,
+
+        "items":
+        processed
+    }
+
+except Exception as e:
+
+    print(
+        "VIDEO SCAN ERROR"
+    )
+
+    print(e)
+
+    return {
+
+        "success": False,
+
+        "error": str(e)
+    }
+```
+
+# ==========================================
+
+# INVOICE SCANNER
+
+# ==========================================
+
+@app.post("/scan_invoice")
+async def scan_invoice(
+file: UploadFile
+):
+
+```
+try:
+
+    image_bytes = await file.read()
+
+    base64_image = base64.b64encode(
+        image_bytes
+    ).decode("utf-8")
+
+    response = client.chat.completions.create(
+
+        model="gpt-4.1-mini",
+
+        messages=[
+
+            {
+                "role": "user",
+
+                "content": [
+
+                    {
+                        "type": "text",
+
+                        "text": """
+                        Analyze this restaurant invoice.
+
+                        Extract:
+                        - product name
+                        - quantity
+                        - unit
+                        - price
+
+                        Return ONLY JSON.
+
+                        [
+                          {
+                            "product_name": "",
+                            "quantity": 0,
+                            "unit": "",
+                            "price": 0
+                          }
+                        ]
+                        """
+                    },
+
+                    {
+                        "type": "image_url",
+
+                        "image_url": {
+                            "url":
+                            f"data:image/jpeg;base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ]
+    )
+
+    raw = (
+        response
+        .choices[0]
+        .message
+        .content
+    )
+
+    cleaned = clean_json(
+        raw
+    )
+
+    invoice_items = json.loads(
+        cleaned
+    )
 
     processed_items = []
 
-    for item in items:
+    for item in invoice_items:
 
         product_name = item.get(
             "product_name",
@@ -424,13 +966,18 @@ def process_inventory_items(
         )
 
         quantity = item.get(
-            "estimated_quantity",
+            "quantity",
             1
         )
 
         unit = item.get(
-            "suggested_base_unit",
+            "unit",
             "each"
+        )
+
+        price = item.get(
+            "price",
+            0
         )
 
         canonical_product = (
@@ -439,19 +986,11 @@ def process_inventory_items(
             )
         )
 
-        # ==================================
-        # EXISTING PRODUCT
-        # ==================================
-
         if canonical_product:
 
             canonical_id = (
                 canonical_product["id"]
             )
-
-        # ==================================
-        # CREATE NEW PRODUCT
-        # ==================================
 
         else:
 
@@ -467,45 +1006,22 @@ def process_inventory_items(
                 created_product["id"]
             )
 
-        # ==================================
-        # UPDATE LIVE INVENTORY
-        # ==================================
+        save_purchase_history(
 
-        inventory_response = supabase.table(
-            "live_inventory"
-        ).select(
-            "*"
-        ).eq(
-            "canonical_product_id",
-            canonical_id
-        ).execute()
+            canonical_id,
 
-        if inventory_response.data:
+            "Unknown Vendor",
 
-            current_quantity = (
-                inventory_response.data[0][
-                    "current_quantity"
-                ]
-            )
+            "today",
 
-            updated_quantity = (
-                current_quantity
-                + quantity
-            )
+            product_name,
 
-            supabase.table(
-                "live_inventory"
-            ).update({
+            quantity,
 
-                "current_quantity":
-                updated_quantity
+            unit,
 
-            }).eq(
-
-                "canonical_product_id",
-                canonical_id
-
-            ).execute()
+            price
+        )
 
         processed_items.append({
 
@@ -515,429 +1031,39 @@ def process_inventory_items(
             "quantity":
             quantity,
 
+            "unit":
+            unit,
+
+            "price":
+            price,
+
             "canonical_product_id":
             canonical_id
         })
 
-    return processed_items
+    return {
 
-# ==========================================
-# IMAGE INVENTORY SCAN
-# ==========================================
+        "success": True,
 
-@app.post("/scan")
-async def scan_inventory(
-    file: UploadFile
-):
+        "vendor_name":
+        "Unknown Vendor",
 
-    try:
+        "items":
+        processed_items
+    }
 
-        image_bytes = await file.read()
+except Exception as e:
 
-        base64_image = base64.b64encode(
-            image_bytes
-        ).decode("utf-8")
+    print(
+        "INVOICE ERROR"
+    )
 
-        response = client.chat.completions.create(
+    print(e)
 
-            model="gpt-4.1-mini",
+    return {
 
-            messages=[
+        "success": False,
 
-                {
-                    "role": "user",
-
-                    "content": [
-
-                        {
-                            "type": "text",
-
-                            "text": """
-                            Identify all inventory items.
-
-                            Return ONLY JSON.
-
-                            [
-                              {
-                                "product_name": "",
-                                "estimated_quantity": 0,
-                                "confidence": 0.0,
-                                "suggested_category": "",
-                                "suggested_base_unit": ""
-                              }
-                            ]
-                            """
-                        },
-
-                        {
-                            "type": "image_url",
-
-                            "image_url": {
-                                "url":
-                                f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ]
-        )
-
-        raw = (
-            response
-            .choices[0]
-            .message
-            .content
-        )
-
-        cleaned = clean_json(
-            raw
-        )
-
-        items = json.loads(
-            cleaned
-        )
-
-        processed = process_inventory_items(
-            items
-        )
-
-        return {
-
-            "success": True,
-
-            "items":
-            processed
-        }
-
-    except Exception as e:
-
-        print(e)
-
-        return {
-
-            "success": False,
-
-            "error": str(e)
-        }
-
-# ==========================================
-# VIDEO INVENTORY SCAN
-# ==========================================
-
-@app.post("/scan_inventory_video")
-async def scan_inventory_video(
-    file: UploadFile
-):
-
-    try:
-
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=".mp4"
-        ) as temp_video:
-
-            video_bytes = await file.read()
-
-            temp_video.write(
-                video_bytes
-            )
-
-            temp_video_path = (
-                temp_video.name
-            )
-
-        cap = cv2.VideoCapture(
-            temp_video_path
-        )
-
-        frame_results = []
-
-        frame_count = 0
-
-        while cap.isOpened():
-
-            success, frame = cap.read()
-
-            if not success:
-                break
-
-            # ==================================
-            # SAMPLE EVERY 30 FRAMES
-            # ==================================
-
-            if frame_count % 30 == 0:
-
-                _, buffer = cv2.imencode(
-                    ".jpg",
-                    frame
-                )
-
-                base64_frame = (
-                    base64.b64encode(
-                        buffer
-                    ).decode("utf-8")
-                )
-
-                response = client.chat.completions.create(
-
-                    model="gpt-4.1-mini",
-
-                    messages=[
-
-                        {
-                            "role": "user",
-
-                            "content": [
-
-                                {
-                                    "type": "text",
-
-                                    "text": """
-                                    Identify inventory items.
-
-                                    Return ONLY JSON.
-
-                                    [
-                                      {
-                                        "product_name": "",
-                                        "estimated_quantity": 0
-                                      }
-                                    ]
-                                    """
-                                },
-
-                                {
-                                    "type": "image_url",
-
-                                    "image_url": {
-                                        "url":
-                                        f"data:image/jpeg;base64,{base64_frame}"
-                                    }
-                                }
-                            ]
-                        }
-                    ]
-                )
-
-                raw = (
-                    response
-                    .choices[0]
-                    .message
-                    .content
-                )
-
-                cleaned = clean_json(
-                    raw
-                )
-
-                try:
-
-                    items = json.loads(
-                        cleaned
-                    )
-
-                    frame_results.extend(
-                        items
-                    )
-
-                except Exception as e:
-
-                    print(
-                        "FRAME JSON ERROR"
-                    )
-
-                    print(e)
-
-            frame_count += 1
-
-        cap.release()
-
-        processed = process_inventory_items(
-            frame_results
-        )
-
-        return {
-
-            "success": True,
-
-            "items":
-            processed
-        }
-
-    except Exception as e:
-
-        print(
-            "VIDEO SCAN ERROR"
-        )
-
-        print(e)
-
-        return {
-
-            "success": False,
-
-            "error": str(e)
-        }
-
-# ==========================================
-# INVOICE SCANNER
-# ==========================================
-
-@app.post("/scan_invoice")
-async def scan_invoice(
-    file: UploadFile
-):
-
-    try:
-
-        image_bytes = await file.read()
-
-        base64_image = base64.b64encode(
-            image_bytes
-        ).decode("utf-8")
-
-        response = client.chat.completions.create(
-
-            model="gpt-4.1-mini",
-
-            messages=[
-
-                {
-                    "role": "user",
-
-                    "content": [
-
-                        {
-                            "type": "text",
-
-                            "text": """
-                            Analyze this restaurant invoice.
-
-                            Extract:
-                            - product name
-                            - quantity
-                            - unit
-                            - price
-
-                            Return ONLY JSON.
-                            """
-                        },
-
-                        {
-                            "type": "image_url",
-
-                            "image_url": {
-                                "url":
-                                f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ]
-        )
-
-        raw = (
-            response
-            .choices[0]
-            .message
-            .content
-        )
-
-        cleaned = clean_json(
-            raw
-        )
-
-        invoice_items = json.loads(
-            cleaned
-        )
-
-        processed_items = []
-
-        for item in invoice_items:
-
-            product_name = item.get(
-                "product_name",
-                ""
-            )
-
-            quantity = item.get(
-                "quantity",
-                1
-            )
-
-            unit = item.get(
-                "unit",
-                "each"
-            )
-
-            price = item.get(
-                "price",
-                0
-            )
-
-            canonical_product = (
-                semantic_match_product(
-                    product_name
-                )
-            )
-
-            if canonical_product:
-
-                canonical_id = (
-                    canonical_product["id"]
-                )
-
-            else:
-
-                created_product = (
-                    create_new_product(
-                        product_name,
-                        quantity,
-                        unit
-                    )
-                )
-
-                canonical_id = (
-                    created_product["id"]
-                )
-
-            processed_items.append({
-
-                "product_name":
-                product_name,
-
-                "quantity":
-                quantity,
-
-                "unit":
-                unit,
-
-                "price":
-                price,
-
-                "canonical_product_id":
-                canonical_id
-            })
-
-        return {
-
-            "success": True,
-
-            "invoice_items":
-            processed_items
-        }
-
-    except Exception as e:
-
-        print(
-            "INVOICE ERROR"
-        )
-
-        print(e)
-
-        return {
-
-            "success": False,
-
-            "error": str(e)
-        }
+        "error": str(e)
+    }
+```
