@@ -527,3 +527,176 @@ async def scan_invoice(file: UploadFile):
         print(e)
         return {"success": False, "error": str(e)}
 
+# ==========================================
+# RECIPE SCANNER
+# ==========================================
+
+@app.post("/scan_recipe")
+async def scan_recipe(file: UploadFile):
+    try:
+        image_bytes = await file.read()
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": """
+Analyze this recipe.
+
+Extract:
+
+- recipe name
+- servings
+- ingredients
+- quantities
+- units
+
+Return ONLY JSON.
+
+{
+  "recipe_name": "",
+  "servings": 0,
+  "ingredients": [
+    {
+      "ingredient": "",
+      "quantity": 0,
+      "unit": ""
+    }
+  ]
+}
+""",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+        raw = response.choices[0].message.content
+        cleaned = clean_json(raw)
+
+        recipe = json.loads(cleaned)
+
+        ingredients = recipe.get("ingredients", [])
+
+        total_cost = 0
+
+        processed_ingredients = []
+
+        for ingredient in ingredients:
+
+            ingredient_name = ingredient.get(
+                "ingredient", ""
+            )
+
+            quantity = float(
+                ingredient.get(
+                    "quantity", 0
+                )
+            )
+
+            unit = ingredient.get(
+                "unit", "each"
+            )
+
+            matched_product = semantic_match_product(
+                ingredient_name
+            )
+
+            ingredient_cost = 0
+
+            if matched_product:
+
+                inventory = (
+                    supabase.table(
+                        "live_inventory"
+                    )
+                    .select("*")
+                    .eq(
+                        "canonical_product_id",
+                        matched_product["id"],
+                    )
+                    .execute()
+                )
+
+                if inventory.data:
+
+                    unit_cost = float(
+                        inventory.data[0].get(
+                            "estimated_unit_cost",
+                            0,
+                        )
+                    )
+
+                    ingredient_cost = (
+                        quantity * unit_cost
+                    )
+
+                    total_cost += ingredient_cost
+
+            processed_ingredients.append(
+                {
+                    "ingredient":
+                        ingredient_name,
+                    "quantity":
+                        quantity,
+                    "unit": unit,
+                    "cost":
+                        round(
+                            ingredient_cost,
+                            2,
+                        ),
+                }
+            )
+
+        servings = float(
+            recipe.get("servings", 1)
+        )
+
+        cost_per_serving = (
+            total_cost / servings
+            if servings > 0
+            else total_cost
+        )
+
+        return {
+            "success": True,
+            "recipe_name":
+                recipe.get(
+                    "recipe_name",
+                    "Unknown Recipe",
+                ),
+            "servings":
+                servings,
+            "total_cost":
+                round(
+                    total_cost,
+                    2,
+                ),
+            "cost_per_serving":
+                round(
+                    cost_per_serving,
+                    2,
+                ),
+            "ingredients":
+                processed_ingredients,
+        }
+
+    except Exception as e:
+        print("RECIPE ERROR")
+        print(e)
+
+        return {
+            "success": False,
+            "error": str(e),
+        }
