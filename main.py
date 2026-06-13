@@ -1,6 +1,8 @@
 from fastapi import FastAPI, UploadFile
 from supabase import create_client
 from openai import OpenAI
+from PIL import Image
+import io
 
 import base64
 import json
@@ -421,8 +423,15 @@ async def scan_inventory(file: UploadFile):
 @app.post("/scan_invoice")
 async def scan_invoice(file: UploadFile):
     try:
-        image_bytes = await file.read()
-        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+        file_bytes = await file.read()
+
+        if file.filename.lower().endswith(".pdf"):
+            return {
+                "success": False,
+                "error": "PDF invoice support coming next"
+            }
+
+        base64_image = base64.b64encode(file_bytes).decode("utf-8")
 
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
@@ -433,25 +442,25 @@ async def scan_invoice(file: UploadFile):
                         {
                             "type": "text",
                             "text": """
-                        Analyze this restaurant invoice.
+Analyze this restaurant invoice.
 
-                        Extract:
-                        - product name
-                        - quantity
-                        - unit
-                        - price
+Extract:
+- product name
+- quantity
+- unit
+- price
 
-                        Return ONLY JSON.
+Return ONLY JSON.
 
-                        [
-                          {
-                            "product_name": "",
-                            "quantity": 0,
-                            "unit": "",
-                            "price": 0
-                          }
-                        ]
-                        """,
+[
+  {
+    "product_name": "",
+    "quantity": 0,
+    "unit": "",
+    "price": 0
+  }
+]
+""",
                         },
                         {
                             "type": "image_url",
@@ -526,6 +535,7 @@ async def scan_invoice(file: UploadFile):
         print("INVOICE ERROR")
         print(e)
         return {"success": False, "error": str(e)}
+
 
 # ==========================================
 # RECIPE SCANNER
