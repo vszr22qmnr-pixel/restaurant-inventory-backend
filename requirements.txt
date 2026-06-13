@@ -10,3 +10,4 @@ storage3
 httpx
 pillow
 opencv-python-headless
+PyMuPDF
