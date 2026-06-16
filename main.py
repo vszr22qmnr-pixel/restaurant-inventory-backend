@@ -560,8 +560,36 @@ Return ONLY JSON.
 @app.post("/scan_recipe")
 async def scan_recipe(file: UploadFile):
     try:
-        image_bytes = await file.read()
-        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+        file_bytes = await file.read()
+
+        if file.filename.lower().endswith(".pdf"):
+            pdf = fitz.open(
+                stream=file_bytes,
+                filetype="pdf",
+            )
+
+            if len(pdf) == 0:
+                return {
+                    "success": False,
+                    "error": "PDF contains no pages",
+                }
+
+            page = pdf[0]
+
+            pix = page.get_pixmap(
+                matrix=fitz.Matrix(2, 2),
+            )
+
+            image_bytes = pix.tobytes("png")
+
+            base64_image = base64.b64encode(
+                image_bytes
+            ).decode("utf-8")
+
+        else:
+            base64_image = base64.b64encode(
+                file_bytes
+            ).decode("utf-8")
 
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
