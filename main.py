@@ -427,12 +427,27 @@ async def scan_invoice(file: UploadFile):
         file_bytes = await file.read()
 
         if file.filename.lower().endswith(".pdf"):
-            return {
-                "success": False,
-                "error": "PDF invoice support coming next"
-            }
+            pdf = fitz.open(
+                stream=file_bytes,
+                filetype="pdf",
+            )
 
-        base64_image = base64.b64encode(file_bytes).decode("utf-8")
+            if len(pdf) == 0:
+                return {
+                    "success": False,
+                    "error": "PDF contains no pages",
+                }
+
+            page = pdf[0]
+
+            pix = page.get_pixmap(
+                matrix=fitz.Matrix(2, 2),
+            )
+
+            image_bytes = pix.tobytes("png")
+            base64_image = base64.b64encode(image_bytes).decode("utf-8")
+        else:
+            base64_image = base64.b64encode(file_bytes).decode("utf-8")
 
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
