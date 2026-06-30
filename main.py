@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile
+from fastapi import FastAPI, UploadFile, Form
 from supabase import create_client
 from openai import OpenAI
 from PIL import Image
@@ -369,7 +369,11 @@ def process_inventory_items(items):
 # ==========================================
 
 @app.post("/scan")
-async def scan_inventory(file: UploadFile):
+async def scan_inventory(
+    file: UploadFile,
+    organization_id: str = Form(...),
+    location_id: str = Form(...),
+):
     try:
         image_bytes = await file.read()
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
