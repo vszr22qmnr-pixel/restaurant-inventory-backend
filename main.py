@@ -239,7 +239,13 @@ def semantic_match_product(scanned_name):
 
 # ==========================================
 
-def create_new_product(product_name, quantity, unit):
+def create_new_product(
+    product_name,
+    quantity,
+    unit,
+    organization_id,
+    location_id,
+):
     metadata = get_ai_product_metadata(product_name, unit)
     category = metadata.get("category", "Other")
     base_unit = metadata.get("base_unit", unit)
@@ -340,7 +346,13 @@ def process_inventory_items(
         if canonical_product:
             canonical_id = canonical_product["id"]
         else:
-            created_product = create_new_product(product_name, quantity, unit)
+            created_product = create_new_product(
+    product_name,
+    quantity,
+    unit,
+    organization_id,
+    location_id,
+)
             canonical_id = created_product["id"]
 
         inventory_response = (
