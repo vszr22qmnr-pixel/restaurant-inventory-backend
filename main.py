@@ -263,15 +263,17 @@ def create_new_product(product_name, quantity, unit):
     ).execute()
 
     supabase.table("live_inventory").insert(
-        {
-            "canonical_product_id": canonical_id,
-            "current_quantity": quantity,
-            "unit": base_unit,
-            "estimated_unit_cost": 0,
-            "par_level": 0,
-            "reorder_threshold": 0,
-        }
-    ).execute()
+    {
+        "canonical_product_id": canonical_id,
+        "current_quantity": quantity,
+        "unit": base_unit,
+        "estimated_unit_cost": 0,
+        "par_level": 0,
+        "reorder_threshold": 0,
+        "organization_id": organization_id,
+        "location_id": location_id,
+    }
+).execute()
 
     return canonical_product
 
@@ -321,7 +323,11 @@ def save_purchase_history(
 
 # ==========================================
 
-def process_inventory_items(items):
+def process_inventory_items(
+    items,
+    organization_id,
+    location_id,
+):
     processed_items = []
 
     for item in items:
@@ -338,11 +344,12 @@ def process_inventory_items(items):
             canonical_id = created_product["id"]
 
         inventory_response = (
-            supabase.table("live_inventory")
-            .select("*")
-            .eq("canonical_product_id", canonical_id)
-            .execute()
-        )
+    supabase.table("live_inventory")
+    .select("*")
+    .eq("canonical_product_id", canonical_id)
+    .eq("organization_id", organization_id)
+    .execute()
+)
 
         if inventory_response.data:
             current_quantity = inventory_response.data[0]["current_quantity"]
@@ -411,7 +418,11 @@ async def scan_inventory(
         raw = response.choices[0].message.content
         cleaned = clean_json(raw)
         items = json.loads(cleaned)
-        processed = process_inventory_items(items)
+        processed = process_inventory_items(
+    items,
+    organization_id,
+    location_id,
+)
 
         return {"success": True, "items": processed}
 
