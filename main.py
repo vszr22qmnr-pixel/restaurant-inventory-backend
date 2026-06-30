@@ -449,7 +449,11 @@ async def scan_inventory(
 # ==========================================
 
 @app.post("/scan_invoice")
-async def scan_invoice(file: UploadFile):
+async def scan_invoice(
+    file: UploadFile,
+    organization_id: str = Form(...),
+    location_id: str = Form(...),
+):
     try:
         file_bytes = await file.read()
 
@@ -531,26 +535,39 @@ Return ONLY JSON.
             if canonical_product:
                 canonical_id = canonical_product["id"]
             else:
-                created_product = create_new_product(product_name, quantity, unit)
+                created_product = create_new_product(
+    product_name,
+    quantity,
+    unit,
+    organization_id,
+    location_id,
+)
                 canonical_id = created_product["id"]
 
             inventory_response = (
-                supabase.table("live_inventory")
-                .select("*")
-                .eq("canonical_product_id", canonical_id)
-                .execute()
-            )
+    supabase.table("live_inventory")
+    .select("*")
+    .eq("canonical_product_id", canonical_id)
+    .eq("organization_id", organization_id)
+    .execute()
+)
 
             if inventory_response.data:
                 current_quantity = inventory_response.data[0]["current_quantity"]
                 updated_quantity = current_quantity + quantity
 
                 supabase.table("live_inventory").update(
-                    {
-                        "current_quantity": updated_quantity,
-                        "estimated_unit_cost": price,
-                    }
-                ).eq("canonical_product_id", canonical_id).execute()
+    {
+        "current_quantity": updated_quantity,
+        "estimated_unit_cost": price,
+    }
+).eq(
+    "canonical_product_id",
+    canonical_id,
+).eq(
+    "organization_id",
+    organization_id,
+).execute()
 
             save_purchase_history(
                 canonical_id,
