@@ -368,8 +368,16 @@ def process_inventory_items(
             updated_quantity = current_quantity + quantity
 
             supabase.table("live_inventory").update(
-                {"current_quantity": updated_quantity}
-            ).eq("canonical_product_id", canonical_id).execute()
+    {
+        "current_quantity": updated_quantity,
+    }
+).eq(
+    "canonical_product_id",
+    canonical_id,
+).eq(
+    "organization_id",
+    organization_id,
+).execute()
 
         processed_items.append(
             {
