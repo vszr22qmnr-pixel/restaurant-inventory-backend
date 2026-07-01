@@ -610,7 +610,11 @@ Return ONLY JSON.
 # ==========================================
 
 @app.post("/scan_recipe")
-async def scan_recipe(file: UploadFile):
+async def scan_recipe(
+    file: UploadFile,
+    organization_id: str = Form(...),
+    location_id: str = Form(...),
+):
     try:
         file_bytes = await file.read()
 
@@ -724,16 +728,18 @@ Return ONLY JSON.
             if matched_product:
 
                 inventory = (
-                    supabase.table(
-                        "live_inventory"
-                    )
-                    .select("*")
-                    .eq(
-                        "canonical_product_id",
-                        matched_product["id"],
-                    )
-                    .execute()
-                )
+    supabase.table("live_inventory")
+    .select("*")
+    .eq(
+        "canonical_product_id",
+        matched_product["id"],
+    )
+    .eq(
+        "organization_id",
+        organization_id,
+    )
+    .execute()
+)
 
                 if inventory.data:
 
