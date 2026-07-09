@@ -590,6 +590,20 @@ Return ONLY JSON.
     "organization_id",
     organization_id,
 ).execute()
+                
+            else:
+             supabase.table("live_inventory").insert(
+        {
+            "canonical_product_id": canonical_id,
+            "current_quantity": quantity,
+            "unit": unit,
+            "estimated_unit_cost": price,
+            "par_level": 0,
+            "reorder_threshold": 0,
+            "organization_id": organization_id,
+            "location_id": location_id,
+        }
+    ).execute()
 
             save_purchase_history(
                 canonical_id,
