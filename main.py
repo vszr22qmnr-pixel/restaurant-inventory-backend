@@ -809,29 +809,69 @@ Return ONLY JSON.
             else total_cost
         )
 
+                # ==========================================
+        # SAVE RECIPE
+        # ==========================================
+
+        recipe_response = (
+            supabase.table("recipes")
+            .insert(
+                {
+                    "organization_id": organization_id,
+                    "recipe_name": recipe.get(
+                        "recipe_name",
+                        "Unknown Recipe",
+                    ),
+                    "recipe_json": recipe,
+                    "total_cost": round(total_cost, 2),
+                    "cost_per_serving": round(cost_per_serving, 2),
+                    "servings": servings,
+                }
+            )
+            .execute()
+        )
+
+        recipe_id = recipe_response.data[0]["id"]
+
+        # ==========================================
+        # SAVE INGREDIENTS
+        # ==========================================
+
+        for ingredient in processed_ingredients:
+
+            (
+                supabase.table("recipe_ingredients")
+                .insert(
+                    {
+                        "recipe_id": recipe_id,
+                        "ingredient_name": ingredient["ingredient"],
+                        "canonical_product_id": None,
+                        "quantity": ingredient["quantity"],
+                        "unit": ingredient["unit"],
+                        "cost": ingredient["cost"],
+                    }
+                )
+                .execute()
+            )
+
+        # ==========================================
+        # SUCCESS
+        # ==========================================
+
         return {
             "success": True,
-            "recipe_name":
-                recipe.get(
-                    "recipe_name",
-                    "Unknown Recipe",
-                ),
-            "servings":
-                servings,
-            "total_cost":
-                round(
-                    total_cost,
-                    2,
-                ),
-            "cost_per_serving":
-                round(
-                    cost_per_serving,
-                    2,
-                ),
-            "ingredients":
-                processed_ingredients,
-        }
-
+            "recipe_id": recipe_id,
+            "recipe_name": recipe.get(
+                "recipe_name",
+                "Unknown Recipe",
+            ),
+            "servings": servings,
+            "total_cost": round(total_cost, 2),
+            "cost_per_serving": round(cost_per_serving, 2),
+            "ingredients": processed_ingredients,
+        }                 
+   
+    
     except Exception as e:
         print("RECIPE ERROR")
         print(e)
