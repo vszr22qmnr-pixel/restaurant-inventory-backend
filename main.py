@@ -844,6 +844,7 @@ Return ONLY JSON.
                 .insert(
                     {
                         "recipe_id": recipe_id,
+                        "organization_id": organization_id,
                         "ingredient_name": ingredient["ingredient"],
                         "canonical_product_id": None,
                         "quantity": ingredient["quantity"],
