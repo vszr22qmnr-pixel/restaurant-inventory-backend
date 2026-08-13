@@ -520,26 +520,38 @@ async def scan_invoice(
                         {
                             "type": "text",
                             "text": """
-Analyze this restaurant invoice.
+Analyze this restaurant invoice carefully.
 
-Extract each invoice line item.
+For EVERY invoice line item extract:
 
-IMPORTANT:
-- "quantity" is the number of units purchased.
-- "price" MUST be the UNIT PRICE / PRICE PER UNIT.
-- DO NOT put the extended line total in "price".
-- If the invoice shows a line total but not a unit price, calculate:
-  unit price = line total ÷ quantity.
-- Example: 75 units with a line total of $25.50 means:
-  quantity = 75
-  price = 0.34
-- Ignore subtotal, tax, invoice total, and other non-item totals.
-
-Extract:
-- product name
+- product_name
 - quantity
 - unit
-- price
+- unit_price
+- line_total
+
+IMPORTANT RULES:
+
+1. quantity = the actual number of units shown on the invoice.
+2. unit_price = the price for ONE unit.
+3. line_total = the total dollar amount for that invoice line.
+4. NEVER put the line total into unit_price.
+5. If the invoice clearly shows quantity and line_total but the unit price is not shown, calculate:
+
+   unit_price = line_total / quantity
+
+6. Example:
+
+   Quantity: 75
+   Line Total: $25.50
+
+   Then:
+   unit_price = 0.34
+   line_total = 25.50
+
+7. Do NOT use invoice subtotal, tax, delivery charges, or grand total as a product line total.
+8. Each product must be returned as its own line item.
+9. Preserve decimal values exactly when possible.
 
 Return ONLY JSON.
 
@@ -548,7 +560,8 @@ Return ONLY JSON.
     "product_name": "",
     "quantity": 0,
     "unit": "",
-    "price": 0
+    "unit_price": 0,
+    "line_total": 0
   }
 ]
 """,
