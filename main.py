@@ -297,14 +297,19 @@ def save_purchase_history(
     quantity,
     unit,
     unit_cost,
+    organization_id,
+    location_id,
 ):
     try:
         quantity = float(quantity)
         unit_cost = float(unit_cost)
+
         total_cost = quantity * unit_cost
 
         print("SAVING PURCHASE")
-        print(total_cost)
+        print("Organization:", organization_id)
+        print("Location:", location_id)
+        print("Total Cost:", total_cost)
 
         supabase.table("purchases").insert(
             {
@@ -316,6 +321,10 @@ def save_purchase_history(
                 "unit": unit,
                 "unit_cost": unit_cost,
                 "total_cost": total_cost,
+
+                # RESTAURANT / LOCATION OWNERSHIP
+                "organization_id": organization_id,
+                "location_id": location_id,
             }
         ).execute()
 
@@ -606,14 +615,16 @@ Return ONLY JSON.
     ).execute()
 
             save_purchase_history(
-                canonical_id,
-                "Unknown Vendor",
-                "today",
-                product_name,
-                quantity,
-                unit,
-                price,
-            )
+    canonical_id,
+    "Unknown Vendor",
+    "today",
+    product_name,
+    quantity,
+    unit,
+    price,
+    organization_id,
+    location_id,
+)
 
             processed_items.append(
                 {
