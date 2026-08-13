@@ -522,6 +522,19 @@ async def scan_invoice(
                             "text": """
 Analyze this restaurant invoice.
 
+Extract each invoice line item.
+
+IMPORTANT:
+- "quantity" is the number of units purchased.
+- "price" MUST be the UNIT PRICE / PRICE PER UNIT.
+- DO NOT put the extended line total in "price".
+- If the invoice shows a line total but not a unit price, calculate:
+  unit price = line total ÷ quantity.
+- Example: 75 units with a line total of $25.50 means:
+  quantity = 75
+  price = 0.34
+- Ignore subtotal, tax, invoice total, and other non-item totals.
+
 Extract:
 - product name
 - quantity
