@@ -585,7 +585,23 @@ Return ONLY JSON.
             product_name = item.get("product_name", "")
             quantity = float(item.get("quantity", 1))
             unit = item.get("unit", "each")
-            price = float(item.get("price", 0))
+
+            unit_price = float(item.get("unit_price", 0))
+            line_total = float(item.get("line_total", 0))
+
+            # Calculate the true unit cost from the invoice line total
+            # whenever a valid quantity and line total are available.
+            if quantity > 0 and line_total > 0:
+             calculated_unit_price = line_total / quantity
+
+            # Use the calculated value from the invoice math.
+            price = calculated_unit_price
+        else:
+            price = unit_price
+
+            # Final safety check
+            if price < 0:
+             price = 0
 
             canonical_product = semantic_match_product(product_name)
 
@@ -657,7 +673,8 @@ Return ONLY JSON.
                     "product_name": product_name,
                     "quantity": quantity,
                     "unit": unit,
-                    "price": price,
+                    "price": round(price, 4),
+                    "line_total": round(price * quantity, 2),
                     "canonical_product_id": canonical_id,
                 }
             )
