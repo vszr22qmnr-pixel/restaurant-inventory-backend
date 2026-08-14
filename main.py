@@ -488,7 +488,14 @@ async def scan_invoice(
     try:
         file_bytes = await file.read()
 
+        # ==========================================
+        # CONVERT INVOICE INTO ONE OR MORE IMAGES
+        # ==========================================
+
+        base64_images = []
+
         if file.filename.lower().endswith(".pdf"):
+
             pdf = fitz.open(
                 stream=file_bytes,
                 filetype="pdf",
@@ -500,29 +507,52 @@ async def scan_invoice(
                     "error": "PDF contains no pages",
                 }
 
-            page = pdf[0]
+            # Read EVERY page of the invoice
+            for page_number in range(len(pdf)):
 
-            pix = page.get_pixmap(
-                matrix=fitz.Matrix(2, 2),
+                page = pdf[page_number]
+
+                pix = page.get_pixmap(
+                    matrix=fitz.Matrix(2, 2),
+                    alpha=False,
+                )
+
+                image_bytes = pix.tobytes("png")
+
+                base64_images.append(
+                    base64.b64encode(
+                        image_bytes
+                    ).decode("utf-8")
+                )
+
+            pdf.close()
+
+        else:
+
+            base64_images.append(
+                base64.b64encode(
+                    file_bytes
+                ).decode("utf-8")
             )
 
-            image_bytes = pix.tobytes("png")
-            base64_image = base64.b64encode(image_bytes).decode("utf-8")
-        else:
-            base64_image = base64.b64encode(file_bytes).decode("utf-8")
+        # ==========================================
+        # SEND ALL INVOICE PAGES TO AI
+        # ==========================================
 
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": """
-Analyze this restaurant invoice carefully.
+        response_content = [
+            {
+                "type": "text",
+                "text": """
+You are analyzing a restaurant food invoice.
 
-For EVERY invoice line item extract:
+IMPORTANT:
+The invoice may contain multiple pages.
+
+You must examine EVERY provided page before returning the answer.
+
+Extract EVERY actual product line from EVERY page.
+
+For EACH product line return:
 
 - product_name
 - quantity
@@ -530,30 +560,55 @@ For EVERY invoice line item extract:
 - unit_price
 - line_total
 
-IMPORTANT RULES:
+IMPORTANT PRICE RULES:
 
-1. quantity = the actual number of units shown on the invoice.
-2. unit_price = the price for ONE unit.
-3. line_total = the total dollar amount for that invoice line.
+1. quantity must be the actual quantity purchased.
+
+2. unit_price must be the price for ONE purchased unit.
+
+3. line_total must be the total dollar amount for that specific product line.
+
 4. NEVER put the line total into unit_price.
-5. If the invoice clearly shows quantity and line_total but the unit price is not shown, calculate:
+
+5. If the invoice gives quantity and line_total but does not clearly show unit_price, calculate:
 
    unit_price = line_total / quantity
 
 6. Example:
 
-   Quantity: 75
-   Line Total: $25.50
-
-   Then:
-   unit_price = 0.34
+   quantity = 75
    line_total = 25.50
 
-7. Do NOT use invoice subtotal, tax, delivery charges, or grand total as a product line total.
-8. Each product must be returned as its own line item.
-9. Preserve decimal values exactly when possible.
+   unit_price = 0.34
 
-Return ONLY JSON.
+7. If quantity is 1 and the invoice line total is $25.50:
+
+   unit_price = 25.50
+   line_total = 25.50
+
+8. Do NOT use:
+   - invoice subtotal
+   - sales tax
+   - delivery charges
+   - service charges
+   - invoice grand total
+   - amount paid
+
+   as a product line.
+
+9. Each product must be its own line item.
+
+10. Include products from ALL pages.
+
+11. Do not stop after the first page.
+
+12. Do not duplicate an item simply because it appears near a page break.
+
+13. Preserve decimal values as accurately as possible.
+
+14. If a line is unreadable, do not invent a price. Use 0 for the missing numeric value.
+
+Return ONLY valid JSON in this exact format:
 
 [
   {
@@ -564,127 +619,386 @@ Return ONLY JSON.
     "line_total": 0
   }
 ]
-""",
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                        },
-                    ],
+"""
+            }
+        ]
+
+        # Add every invoice page to the AI request
+        for base64_image in base64_images:
+
+            response_content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": (
+                            "data:image/png;base64,"
+                            + base64_image
+                        )
+                    },
+                }
+            )
+
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": response_content,
                 }
             ],
         )
 
+        # ==========================================
+        # PARSE AI RESPONSE
+        # ==========================================
+
         raw = response.choices[0].message.content
+
         cleaned = clean_json(raw)
+
         invoice_items = json.loads(cleaned)
+
+        if not isinstance(invoice_items, list):
+
+            return {
+                "success": False,
+                "error": "AI did not return invoice line items as a list.",
+            }
+
+        # ==========================================
+        # PROCESS INVOICE ITEMS
+        # ==========================================
 
         processed_items = []
 
         for item in invoice_items:
-            product_name = item.get("product_name", "")
-            quantity = float(item.get("quantity", 1))
-            unit = item.get("unit", "each")
 
-            unit_price = float(item.get("unit_price", 0))
-            line_total = float(item.get("line_total", 0))
+            product_name = str(
+                item.get(
+                    "product_name",
+                    "",
+                )
+            ).strip()
 
-            # Calculate the true unit cost from the invoice line total
-            # whenever a valid quantity and line total are available.
+            if not product_name:
+                continue
+
+            # ------------------------------------------
+            # QUANTITY
+            # ------------------------------------------
+
+            try:
+                quantity = float(
+                    item.get(
+                        "quantity",
+                        1,
+                    )
+                )
+            except Exception:
+                quantity = 1.0
+
+            if quantity <= 0:
+                quantity = 1.0
+
+            # ------------------------------------------
+            # UNIT
+            # ------------------------------------------
+
+            unit = str(
+                item.get(
+                    "unit",
+                    "each",
+                )
+            ).strip()
+
+            if not unit:
+                unit = "each"
+
+            # ------------------------------------------
+            # AI PRICE VALUES
+            # ------------------------------------------
+
+            try:
+                unit_price = float(
+                    item.get(
+                        "unit_price",
+                        0,
+                    )
+                )
+            except Exception:
+                unit_price = 0.0
+
+            try:
+                line_total = float(
+                    item.get(
+                        "line_total",
+                        0,
+                    )
+                )
+            except Exception:
+                line_total = 0.0
+
+            # ------------------------------------------
+            # CLEAN NEGATIVE VALUES
+            # ------------------------------------------
+
+            if unit_price < 0:
+                unit_price = 0.0
+
+            if line_total < 0:
+                line_total = 0.0
+
+            # ==========================================
+            # DETERMINE TRUE UNIT COST
+            # ==========================================
+
+            # If the invoice has a valid line total,
+            # calculate the unit cost from the line total.
+            #
+            # This prevents the invoice line total from
+            # accidentally becoming the unit price.
+
             if quantity > 0 and line_total > 0:
-             calculated_unit_price = line_total / quantity
 
-            # Use the calculated value from the invoice math.
-            price = calculated_unit_price
-        else:
-            price = unit_price
+                calculated_unit_price = (
+                    line_total / quantity
+                )
 
-            # Final safety check
-            if price < 0:
-             price = 0
+                price = calculated_unit_price
 
-            canonical_product = semantic_match_product(product_name)
+            elif unit_price > 0:
+
+                price = unit_price
+
+                # If no line total was supplied,
+                # calculate it from quantity x unit price.
+                line_total = (
+                    quantity * price
+                )
+
+            else:
+
+                price = 0.0
+                line_total = 0.0
+
+            # ==========================================
+            # FIND EXISTING CANONICAL PRODUCT
+            # ==========================================
+
+            canonical_product = (
+                semantic_match_product(
+                    product_name
+                )
+            )
 
             if canonical_product:
-                canonical_id = canonical_product["id"]
+
+                canonical_id = (
+                    canonical_product["id"]
+                )
+
             else:
-                created_product = create_new_product(
-    product_name,
-    quantity,
-    unit,
-    organization_id,
-    location_id,
-)
-                canonical_id = created_product["id"]
+
+                created_product = (
+                    create_new_product(
+                        product_name,
+                        quantity,
+                        unit,
+                        organization_id,
+                        location_id,
+                    )
+                )
+
+                canonical_id = (
+                    created_product["id"]
+                )
+
+            # ==========================================
+            # FIND THIS RESTAURANT'S INVENTORY
+            # ==========================================
 
             inventory_response = (
-    supabase.table("live_inventory")
-    .select("*")
-    .eq("canonical_product_id", canonical_id)
-    .eq("organization_id", organization_id)
-    .execute()
-)
+                supabase
+                .table("live_inventory")
+                .select("*")
+                .eq(
+                    "canonical_product_id",
+                    canonical_id,
+                )
+                .eq(
+                    "organization_id",
+                    organization_id,
+                )
+                .eq(
+                    "location_id",
+                    location_id,
+                )
+                .execute()
+            )
+
+            # ==========================================
+            # UPDATE EXISTING INVENTORY
+            # ==========================================
 
             if inventory_response.data:
-                current_quantity = inventory_response.data[0]["current_quantity"]
-                updated_quantity = current_quantity + quantity
 
-                supabase.table("live_inventory").update(
-    {
-        "current_quantity": updated_quantity,
-        "estimated_unit_cost": price,
-    }
-).eq(
-    "canonical_product_id",
-    canonical_id,
-).eq(
-    "organization_id",
-    organization_id,
-).execute()
-                
+                current_quantity = float(
+                    inventory_response
+                    .data[0]
+                    .get(
+                        "current_quantity",
+                        0,
+                    )
+                )
+
+                updated_quantity = (
+                    current_quantity + quantity
+                )
+
+                (
+                    supabase
+                    .table("live_inventory")
+                    .update(
+                        {
+                            "current_quantity":
+                                updated_quantity,
+
+                            "estimated_unit_cost":
+                                price,
+                        }
+                    )
+                    .eq(
+                        "canonical_product_id",
+                        canonical_id,
+                    )
+                    .eq(
+                        "organization_id",
+                        organization_id,
+                    )
+                    .eq(
+                        "location_id",
+                        location_id,
+                    )
+                    .execute()
+                )
+
+            # ==========================================
+            # CREATE NEW INVENTORY RECORD
+            # ==========================================
+
             else:
-             supabase.table("live_inventory").insert(
-        {
-            "canonical_product_id": canonical_id,
-            "current_quantity": quantity,
-            "unit": unit,
-            "estimated_unit_cost": price,
-            "par_level": 0,
-            "reorder_threshold": 0,
-            "organization_id": organization_id,
-            "location_id": location_id,
-        }
-    ).execute()
+
+                (
+                    supabase
+                    .table("live_inventory")
+                    .insert(
+                        {
+                            "canonical_product_id":
+                                canonical_id,
+
+                            "current_quantity":
+                                quantity,
+
+                            "unit":
+                                unit,
+
+                            "estimated_unit_cost":
+                                price,
+
+                            "par_level":
+                                0,
+
+                            "reorder_threshold":
+                                0,
+
+                            "organization_id":
+                                organization_id,
+
+                            "location_id":
+                                location_id,
+                        }
+                    )
+                    .execute()
+                )
+
+            # ==========================================
+            # SAVE PURCHASE HISTORY
+            # ==========================================
 
             save_purchase_history(
-    canonical_id,
-    "Unknown Vendor",
-    "today",
-    product_name,
-    quantity,
-    unit,
-    price,
-    organization_id,
-    location_id,
-)
+                canonical_id,
+                "Unknown Vendor",
+                "today",
+                product_name,
+                quantity,
+                unit,
+                price,
+                organization_id,
+                location_id,
+            )
+
+            # ==========================================
+            # RETURN PROCESSED ITEM
+            # ==========================================
 
             processed_items.append(
                 {
-                    "product_name": product_name,
-                    "quantity": quantity,
-                    "unit": unit,
-                    "price": round(price, 4),
-                    "line_total": round(price * quantity, 2),
-                    "canonical_product_id": canonical_id,
+                    "product_name":
+                        product_name,
+
+                    "quantity":
+                        quantity,
+
+                    "unit":
+                        unit,
+
+                    "price":
+                        round(
+                            price,
+                            4,
+                        ),
+
+                    "line_total":
+                        round(
+                            line_total,
+                            2,
+                        ),
+
+                    "canonical_product_id":
+                        canonical_id,
                 }
             )
 
-        return {"success": True, "vendor_name": "Unknown Vendor", "items": processed_items}
+        # ==========================================
+        # SUCCESS
+        # ==========================================
+
+        return {
+            "success": True,
+            "vendor_name":
+                "Unknown Vendor",
+            "pages_processed":
+                len(base64_images),
+            "items":
+                processed_items,
+        }
+
+    # ==========================================
+    # ERROR HANDLING
+    # ==========================================
 
     except Exception as e:
-        print("INVOICE ERROR")
+
+        print(
+            "INVOICE ERROR"
+        )
+
         print(e)
-        return {"success": False, "error": str(e)}
+
+        return {
+            "success": False,
+            "error": str(e),
+        }
 
 
 # ==========================================
