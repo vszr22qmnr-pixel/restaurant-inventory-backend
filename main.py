@@ -700,76 +700,109 @@ async def scan_recipe(
     try:
         file_bytes = await file.read()
 
+        # If PDF, convert pages to images
+        base64_images = []
         if file.filename.lower().endswith(".pdf"):
-            pdf = fitz.open(
-                stream=file_bytes,
-                filetype="pdf",
-            )
+            pdf = fitz.open(stream=file_bytes, filetype="pdf")
 
             if len(pdf) == 0:
-                return {
-                    "success": False,
-                    "error": "PDF contains no pages",
-                }
+                return {"success": False, "error": "PDF contains no pages"}
 
-            page = pdf[0]
+            for page_number in range(len(pdf)):
+                page = pdf[page_number]
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                image_bytes = pix.tobytes("png")
+                base64_images.append(base64.b64encode(image_bytes).decode("utf-8"))
 
-            pix = page.get_pixmap(
-                matrix=fitz.Matrix(2, 2),
-            )
-
-            image_bytes = pix.tobytes("png")
-
-            base64_image = base64.b64encode(
-                image_bytes
-            ).decode("utf-8")
-
+            pdf.close()
         else:
-            base64_image = base64.b64encode(
-                file_bytes
-            ).decode("utf-8")
+            base64_images = [base64.b64encode(file_bytes).decode("utf-8")]
+
+        # Use the first image for analysis
+        base64_image = base64_images[0]
+
+        response_content = [
+            {
+                "type": "text",
+                "text": """
+Analyze this restaurant invoice.
+
+The invoice may contain multiple pages.
+
+Read ALL provided pages before returning the result.
+
+Extract EVERY invoice line item from EVERY page.
+
+For each item extract:
+
+- product name
+- quantity
+- unit
+- unit_price
+- line_total
+
+IMPORTANT:
+
+1. quantity = the actual quantity purchased.
+2. unit_price = the price for ONE purchased unit.
+3. line_total = the total price for that invoice line.
+4. NEVER use the line total as the unit price.
+5. If quantity and line_total are available but unit_price is not clearly printed, calculate:
+
+   unit_price = line_total / quantity
+
+6. Example:
+
+   quantity = 75
+   line_total = 25.50
+
+   unit_price = 0.34
+
+7. Do NOT include:
+   - subtotal
+   - sales tax
+   - delivery charges
+   - invoice total
+   - payments
+   - discounts unless they are clearly part of a product line
+
+8. Include products from ALL pages.
+
+9. Do not stop after the first page.
+
+10. Do not duplicate an item simply because it appears near a page break.
+
+Return ONLY valid JSON.
+
+[
+  {
+    "product_name": "",
+    "quantity": 0,
+    "unit": "",
+    "unit_price": 0,
+    "line_total": 0
+  }
+]
+""",
+            }
+        ]
+
+        for base64_image in base64_images:
+            response_content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{base64_image}"
+                    },
+                }
+            )
 
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": """
-Analyze this recipe.
-
-Extract:
-
-- recipe name
-- servings
-- ingredients
-- quantities
-- units
-
-Return ONLY JSON.
-
-{
-  "recipe_name": "",
-  "servings": 0,
-  "ingredients": [
-    {
-      "ingredient": "",
-      "quantity": 0,
-      "unit": ""
-    }
-  ]
-}
-""",
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            },
-                        },
-                    ],
+                    "content": response_content,
                 }
             ],
         )
