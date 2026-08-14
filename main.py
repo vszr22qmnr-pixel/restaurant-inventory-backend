@@ -474,9 +474,7 @@ async def scan_inventory(
         return {"success": False, "error": str(e)}
 
 # ==========================================
-
 # INVOICE SCANNER
-
 # ==========================================
 
 @app.post("/scan_invoice")
@@ -486,11 +484,12 @@ async def scan_invoice(
     location_id: str = Form(...),
 ):
     try:
-        file_bytes = await file.read()
 
         # ==========================================
-        # CONVERT INVOICE INTO ONE OR MORE IMAGES
+        # READ FILE
         # ==========================================
+
+        file_bytes = await file.read()
 
         base64_images = []
 
@@ -507,7 +506,7 @@ async def scan_invoice(
                     "error": "PDF contains no pages",
                 }
 
-            # Read EVERY page of the invoice
+            # Read EVERY page
             for page_number in range(len(pdf)):
 
                 page = pdf[page_number]
@@ -536,107 +535,208 @@ async def scan_invoice(
             )
 
         # ==========================================
-        # SEND ALL INVOICE PAGES TO AI
+        # AI INVOICE ANALYSIS
         # ==========================================
 
         response_content = [
             {
                 "type": "text",
                 "text": """
-You are analyzing a restaurant food invoice.
+You are an expert restaurant invoice data extraction system.
+
+Analyze EVERY page and EVERY visible invoice table row.
+
+Do NOT stop after finding one item.
+
+The invoice may contain:
+- food
+- beverages
+- paper products
+- cleaning supplies
+- restaurant supplies
+- equipment
+- service charges
+- surcharges
+- taxes
+- maintenance charges
+- other fees
+
+You must examine the ENTIRE invoice before returning the JSON.
 
 IMPORTANT:
-The invoice may contain multiple pages.
 
-You must examine EVERY provided page before returning the answer.
+For every actual charge row in the invoice, create ONE item.
 
-Extract EVERY actual product line from EVERY page.
+DO NOT combine multiple rows.
 
-For EACH product line return:
+DO NOT omit rows.
 
-- product_name
-- quantity
-- unit
-- unit_price
-- line_total
+DO NOT use the invoice subtotal or invoice total as an item.
 
-IMPORTANT PRICE RULES:
+DO NOT create a fake item representing the invoice total.
 
-1. quantity must be the actual quantity purchased.
+For each row determine:
 
-2. unit_price must be the price for ONE purchased unit.
+1. product_name
+2. quantity
+3. unit
+4. unit_price
+5. line_total
+6. item_type
 
-3. line_total must be the total dollar amount for that specific product line.
+item_type MUST be one of:
 
-4. NEVER put the line total into unit_price.
+"inventory"
 
-5. If the invoice gives quantity and line_total but does not clearly show unit_price, calculate:
+or
 
-   unit_price = line_total / quantity
+"fee"
 
-6. Example:
+Use "inventory" for an actual product, supply, food item,
+beverage, paper product, cleaning product, equipment,
+or other physical item being purchased.
 
-   quantity = 75
-   line_total = 25.50
+Use "fee" for:
+- energy surcharge
+- maintenance charge
+- service charge
+- delivery charge
+- environmental fee
+- administrative fee
+- other non-product charges
 
-   unit_price = 0.34
+PRICE RULES:
 
-7. If quantity is 1 and the invoice line total is $25.50:
+If the invoice has columns such as:
 
-   unit_price = 25.50
-   line_total = 25.50
+QTY | DESCRIPTION | RATE | AMOUNT | TAX | TOTAL
 
-8. Do NOT use:
-   - invoice subtotal
-   - sales tax
-   - delivery charges
-   - service charges
-   - invoice grand total
-   - amount paid
+then:
 
-   as a product line.
+unit_price = RATE
 
-9. Each product must be its own line item.
+line_total = TOTAL
 
-10. Include products from ALL pages.
+Do NOT use TAX as the unit price.
 
-11. Do not stop after the first page.
+Do NOT use AMOUNT as the unit price when RATE is available.
 
-12. Do not duplicate an item simply because it appears near a page break.
+If RATE is not available but AMOUNT and quantity are available:
 
-13. Preserve decimal values as accurately as possible.
+unit_price = AMOUNT / quantity
 
-14. If a line is unreadable, do not invent a price. Use 0 for the missing numeric value.
+If TOTAL is available, use TOTAL as line_total.
 
-Return ONLY valid JSON in this exact format:
+If TOTAL is not available:
 
-[
-  {
-    "product_name": "",
-    "quantity": 0,
-    "unit": "",
-    "unit_price": 0,
-    "line_total": 0
-  }
-]
+line_total = quantity * unit_price
+
+For fee rows where there is no quantity:
+
+quantity = 1
+
+unit = "fee"
+
+unit_price = the pre-tax fee amount
+
+line_total = the pre-tax fee amount
+
+IMPORTANT EXAMPLE:
+
+If the invoice says:
+
+75
+APR-SPUNPOLY BIB
+RATE 0.3177
+AMOUNT 23.83
+TAX 1.67
+TOTAL 25.50
+
+return:
+
+{
+  "product_name": "APR-SPUNPOLY BIB",
+  "quantity": 75,
+  "unit": "each",
+  "unit_price": 0.3177,
+  "line_total": 25.50,
+  "item_type": "inventory"
+}
+
+IMPORTANT:
+
+Do NOT interpret the 25.50 total as the unit price.
+
+For a fee such as:
+
+ENER Energy Surcharge
+2.2500
+2.25
+0.16
+2.41
+
+return:
+
+{
+  "product_name": "Energy Surcharge",
+  "quantity": 1,
+  "unit": "fee",
+  "unit_price": 2.25,
+  "line_total": 2.25,
+  "item_type": "fee"
+}
+
+The tax amount is NOT part of the inventory unit cost.
+
+Return the vendor name and invoice date.
+
+Return the invoice total shown on the invoice.
+
+Return ONLY valid JSON.
+
+Use this exact structure:
+
+{
+  "vendor_name": "",
+  "invoice_date": "",
+  "invoice_total": 0,
+  "items": [
+    {
+      "product_name": "",
+      "quantity": 0,
+      "unit": "",
+      "unit_price": 0,
+      "line_total": 0,
+      "item_type": "inventory"
+    }
+  ]
+}
+
+Before returning the answer, verify that you have examined every page and every invoice line.
 """
             }
         ]
 
-        # Add every invoice page to the AI request
+        # ==========================================
+        # ADD ALL PAGES
+        # ==========================================
+
         for base64_image in base64_images:
 
             response_content.append(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": (
+                        "url":
                             "data:image/png;base64,"
                             + base64_image
-                        )
                     },
                 }
             )
+
+        # ==========================================
+        # CALL OPENAI
+        # ==========================================
 
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
@@ -648,28 +748,90 @@ Return ONLY valid JSON in this exact format:
             ],
         )
 
-        # ==========================================
-        # PARSE AI RESPONSE
-        # ==========================================
-
         raw = response.choices[0].message.content
 
         cleaned = clean_json(raw)
 
-        invoice_items = json.loads(cleaned)
+        invoice_data = json.loads(cleaned)
 
-        if not isinstance(invoice_items, list):
+        # ==========================================
+        # VALIDATE RESPONSE
+        # ==========================================
+
+        if not isinstance(
+            invoice_data,
+            dict,
+        ):
 
             return {
                 "success": False,
-                "error": "AI did not return invoice line items as a list.",
+                "error":
+                    "AI returned an invalid invoice format.",
             }
 
+        invoice_items = invoice_data.get(
+            "items",
+            [],
+        )
+
+        if not isinstance(
+            invoice_items,
+            list,
+        ):
+
+            return {
+                "success": False,
+                "error":
+                    "AI did not return invoice items correctly.",
+            }
+
+        vendor_name = str(
+            invoice_data.get(
+                "vendor_name",
+                "Unknown Vendor",
+            )
+        ).strip()
+
+        if not vendor_name:
+
+            vendor_name = "Unknown Vendor"
+
+        invoice_date = str(
+            invoice_data.get(
+                "invoice_date",
+                "today",
+            )
+        ).strip()
+
+        if not invoice_date:
+
+            invoice_date = "today"
+
         # ==========================================
-        # PROCESS INVOICE ITEMS
+        # INVOICE TOTAL
+        # ==========================================
+
+        try:
+
+            invoice_total = float(
+                invoice_data.get(
+                    "invoice_total",
+                    0,
+                )
+            )
+
+        except Exception:
+
+            invoice_total = 0.0
+
+        # ==========================================
+        # PROCESS ITEMS
         # ==========================================
 
         processed_items = []
+
+        inventory_total = 0.0
+        fee_total = 0.0
 
         for item in invoice_items:
 
@@ -684,20 +846,42 @@ Return ONLY valid JSON in this exact format:
                 continue
 
             # ------------------------------------------
+            # ITEM TYPE
+            # ------------------------------------------
+
+            item_type = str(
+                item.get(
+                    "item_type",
+                    "inventory",
+                )
+            ).strip().lower()
+
+            if item_type not in [
+                "inventory",
+                "fee",
+            ]:
+
+                item_type = "inventory"
+
+            # ------------------------------------------
             # QUANTITY
             # ------------------------------------------
 
             try:
+
                 quantity = float(
                     item.get(
                         "quantity",
                         1,
                     )
                 )
+
             except Exception:
+
                 quantity = 1.0
 
             if quantity <= 0:
+
                 quantity = 1.0
 
             # ------------------------------------------
@@ -712,77 +896,127 @@ Return ONLY valid JSON in this exact format:
             ).strip()
 
             if not unit:
-                unit = "each"
+
+                unit = (
+                    "fee"
+                    if item_type == "fee"
+                    else "each"
+                )
 
             # ------------------------------------------
-            # AI PRICE VALUES
+            # UNIT PRICE
             # ------------------------------------------
 
             try:
+
                 unit_price = float(
                     item.get(
                         "unit_price",
                         0,
                     )
                 )
+
             except Exception:
+
                 unit_price = 0.0
 
+            if unit_price < 0:
+
+                unit_price = 0.0
+
+            # ------------------------------------------
+            # LINE TOTAL
+            # ------------------------------------------
+
             try:
+
                 line_total = float(
                     item.get(
                         "line_total",
                         0,
                     )
                 )
+
             except Exception:
+
                 line_total = 0.0
-
-            # ------------------------------------------
-            # CLEAN NEGATIVE VALUES
-            # ------------------------------------------
-
-            if unit_price < 0:
-                unit_price = 0.0
 
             if line_total < 0:
+
                 line_total = 0.0
 
             # ==========================================
-            # DETERMINE TRUE UNIT COST
+            # CALCULATE MISSING VALUES
             # ==========================================
 
-            # If the invoice has a valid line total,
-            # calculate the unit cost from the line total.
-            #
-            # This prevents the invoice line total from
-            # accidentally becoming the unit price.
+            if (
+                line_total <= 0
+                and unit_price > 0
+            ):
 
-            if quantity > 0 and line_total > 0:
+                line_total = (
+                    quantity * unit_price
+                )
 
-                calculated_unit_price = (
+            elif (
+                unit_price <= 0
+                and line_total > 0
+                and quantity > 0
+            ):
+
+                unit_price = (
                     line_total / quantity
                 )
 
-                price = calculated_unit_price
+            # ==========================================
+            # FEES
+            # ==========================================
 
-            elif unit_price > 0:
+            if item_type == "fee":
 
-                price = unit_price
+                fee_total += line_total
 
-                # If no line total was supplied,
-                # calculate it from quantity x unit price.
-                line_total = (
-                    quantity * price
+                processed_items.append(
+                    {
+                        "product_name":
+                            product_name,
+
+                        "quantity":
+                            quantity,
+
+                        "unit":
+                            unit,
+
+                        "price":
+                            round(
+                                unit_price,
+                                4,
+                            ),
+
+                        "line_total":
+                            round(
+                                line_total,
+                                2,
+                            ),
+
+                        "item_type":
+                            "fee",
+
+                        "canonical_product_id":
+                            None,
+                    }
                 )
 
-            else:
-
-                price = 0.0
-                line_total = 0.0
+                continue
 
             # ==========================================
-            # FIND EXISTING CANONICAL PRODUCT
+            # INVENTORY ITEM
+            # ==========================================
+
+            inventory_total += line_total
+
+            # ==========================================
+            # FIND CANONICAL PRODUCT
             # ==========================================
 
             canonical_product = (
@@ -814,7 +1048,7 @@ Return ONLY valid JSON in this exact format:
                 )
 
             # ==========================================
-            # FIND THIS RESTAURANT'S INVENTORY
+            # FIND RESTAURANT INVENTORY
             # ==========================================
 
             inventory_response = (
@@ -864,7 +1098,7 @@ Return ONLY valid JSON in this exact format:
                                 updated_quantity,
 
                             "estimated_unit_cost":
-                                price,
+                                unit_price,
                         }
                     )
                     .eq(
@@ -883,7 +1117,7 @@ Return ONLY valid JSON in this exact format:
                 )
 
             # ==========================================
-            # CREATE NEW INVENTORY RECORD
+            # CREATE INVENTORY
             # ==========================================
 
             else:
@@ -903,7 +1137,7 @@ Return ONLY valid JSON in this exact format:
                                 unit,
 
                             "estimated_unit_cost":
-                                price,
+                                unit_price,
 
                             "par_level":
                                 0,
@@ -927,18 +1161,18 @@ Return ONLY valid JSON in this exact format:
 
             save_purchase_history(
                 canonical_id,
-                "Unknown Vendor",
-                "today",
+                vendor_name,
+                invoice_date,
                 product_name,
                 quantity,
                 unit,
-                price,
+                unit_price,
                 organization_id,
                 location_id,
             )
 
             # ==========================================
-            # RETURN PROCESSED ITEM
+            # ADD RESULT
             # ==========================================
 
             processed_items.append(
@@ -954,7 +1188,7 @@ Return ONLY valid JSON in this exact format:
 
                     "price":
                         round(
-                            price,
+                            unit_price,
                             4,
                         ),
 
@@ -964,21 +1198,48 @@ Return ONLY valid JSON in this exact format:
                             2,
                         ),
 
+                    "item_type":
+                        "inventory",
+
                     "canonical_product_id":
                         canonical_id,
                 }
             )
 
         # ==========================================
-        # SUCCESS
+        # SUCCESS RESPONSE
         # ==========================================
 
         return {
             "success": True,
+
             "vendor_name":
-                "Unknown Vendor",
+                vendor_name,
+
+            "invoice_date":
+                invoice_date,
+
+            "invoice_total":
+                round(
+                    invoice_total,
+                    2,
+                ),
+
+            "inventory_total":
+                round(
+                    inventory_total,
+                    2,
+                ),
+
+            "fee_total":
+                round(
+                    fee_total,
+                    2,
+                ),
+
             "pages_processed":
                 len(base64_images),
+
             "items":
                 processed_items,
         }
